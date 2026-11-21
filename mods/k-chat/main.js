@@ -1,20 +1,41 @@
-// k-chat (herdr-essentials): the focused Claude Code terminal's conversation as cards.
+// k-chat (herdr-essentials): a Claude Code terminal's conversation as cards, one per message,
+// shown in the terminal's place (k-tabs' Cards | Terminal switch puts it there).
 // Reads the transcript Claude Code writes (~/.claude/projects/<folder>/<session>.jsonl), not
-// the screen: the terminal stays for dialogs and / commands; this is for reading, and for
-// sending a plain message (`hc send`). Unix machines only (the reads go through `sh`).
+// the screen. Dialogs (permissions, choices) and / commands stay in the terminal: switch back
+// for those. Unix machines only (the reads go through `sh`).
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle, TextareaState, Textarea, TextView } from "gpui-base";
-import { exec, hc, focused, terminals, theme, settings, checking, nextCommand, notify } from "herdr";
-import { Chat, resumeId, fence, usageLine, splitChunk, RESOLVE, READ } from "./transcript.js";
+import { exec, hc, home, focused, panes, terminals, layout, run, theme, checking, nextCommand, notify } from "herdr";
+import { Chat, resumeId, fence, splitChunk, RESOLVE, READ } from "./transcript.js";
 
 const FIRST = 1_500_000; // bytes read back when a transcript opens
 const STEP = 4_000_000; // most bytes one poll reads
 const SHOW = 80; // cards drawn at first; "Show earlier" adds more
-const MODES = ["md", "html", "raw"];
+const STACK = "k-chat-stack"; // k-tabs' stack: the terminal block and this one (see k-tabs/chat.js)
+const CARDS = "k-chat-cards";
 
 const machineOf = (address) => (address?.includes("/") ? address.split("/")[0] : null);
 const mb = (n) => `${(n / 1e6).toFixed(1)} MB`;
+
+function find(node, id) {
+  if (node?.id === id) return node;
+  for (const child of node?.children ?? []) {
+    const found = find(child, id);
+    if (found) return found;
+  }
+  return null;
+}
+
+// Today: 00:12:03. Before: 11/21 23:55.
+function when(at) {
+  if (!at) return "";
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  const time = `${p(d.getHours())}:${p(d.getMinutes())}`;
+  return d.toDateString() === new Date().toDateString() ? `${time}:${p(d.getSeconds())}` : `${d.getMonth() + 1}/${d.getDate()} ${time}`;
+}
 
 export default class KChat extends View {
   init(_props, cx) {
@@ -28,9 +49,9 @@ export default class KChat extends View {
     this.busy = false;
     this.show = SHOW;
     this.open = new Set(); // expanded tool calls
-    this.modes = new Map(); // card key → md | html | raw
-    try { this.mode = MODES.includes(localStorage.getItem("mode")) ? localStorage.getItem("mode") : "md"; } catch { this.mode = "md"; }
+    this.copied = null;
     this.follow = true;
+    this.me = String(home() ?? "").split(/[\\/]/).filter(Boolean).pop() || "you";
     this.scroll = ScrollHandle.new();
     this.input = TextareaState.new({ placeholder: "Message (Enter sends, Shift+Enter: new line)" });
     this.input.set_auto_grow(1, 8);
@@ -43,7 +64,8 @@ export default class KChat extends View {
     cx.spawn(async (cx) => {
       for (;;) {
         const c = await nextCommand();
-        if (c === "focus") this.input.focus();
+        // Shown again (k-tabs' Cards): to the latest, and the keyboard to the message box.
+        if (c === "focus") { this.input.focus(); if (this.follow) this.scrollDown(); }
         cx.notify();
       }
     });
@@ -51,11 +73,17 @@ export default class KChat extends View {
     cx.timer.every(2000, (cx) => this.tick(cx));
   }
 
-  // The terminal to show: the focused one; while the keyboard is here (a mod pane), the last.
+  // The terminal to show: the focused one; while the keyboard is here, the shown tab's
+  // focused terminal (else its agent, else its first terminal).
   target() {
     const f = focused();
-    const addr = f?.shown ?? f?.terminal ?? f?.agent;
-    if (addr) this.lastFocus = addr;
+    const direct = f?.shown ?? f?.terminal;
+    if (direct) return (this.lastFocus = direct);
+    if (f?.tab) {
+      const inTab = panes().filter((p) => p.tab === f.tab && p.terminal);
+      const p = inTab.find((p) => p.focused) ?? inTab.find((p) => p.program?.agent) ?? inTab[0];
+      if (p) return (this.lastFocus = p.terminal);
+    }
     return this.lastFocus ?? null;
   }
 
@@ -69,7 +97,6 @@ export default class KChat extends View {
     this.error = null;
     this.show = SHOW;
     this.open.clear();
-    this.modes.clear();
     this.follow = true;
   }
 
@@ -142,10 +169,8 @@ export default class KChat extends View {
     const { lines, used } = splitChunk(body, first && start > 0);
     this.offset += used;
     if (!lines.length) return;
-    const before = this.chat.cards.length;
-    const lastKey = this.chat.cards.at(-1)?.key;
     this.chat.push(lines);
-    if (this.follow && (this.chat.cards.length !== before || this.chat.cards.at(-1)?.key === lastKey)) this.scrollDown();
+    if (this.follow) this.scrollDown();
   }
 
   scrollDown() {
@@ -173,39 +198,23 @@ export default class KChat extends View {
     });
   }
 
-  setMode(key, mode) {
-    if (key) this.modes.set(key, mode);
-    else {
-      this.mode = mode;
-      this.modes.clear();
-      try { localStorage.setItem("mode", mode); } catch {}
-    }
+  // Back to the terminal (k-tabs' stack), or null when this copy isn't in one.
+  terminalChild() {
+    const stack = find(layout(), STACK);
+    return stack?.children?.find((c) => c.id !== CARDS)?.id ?? null;
   }
 
-  modeButtons(t, key) {
-    const on = key ? (this.modes.get(key) ?? this.mode) : this.mode;
-    return h_flex().gap(2).flex_none().children(MODES.map((m) => div()
-      .id(`mode-${key ?? "all"}-${m}`)
-      .px(5)
-      .h(16)
-      .rounded(4)
-      .flex()
-      .items_center()
-      .text_size(9.5)
-      .font_medium()
-      .cursor_pointer()
-      .text_color(m === on ? t.foreground : t.dim)
-      .when(m === on, (el) => el.bg(t.hover))
-      .hover((s) => s.text_color(t.foreground))
-      .on_click((_e, cx) => { cx.stop_propagation(); this.setMode(key, m); cx.notify(); })
-      .child(m.toUpperCase())));
+  toTerminal() {
+    const child = this.terminalChild();
+    if (child) run("layout.select", { stack: STACK, child });
+    if (this.address) run("pane.focus", { terminal: this.address });
   }
 
-  // One text in the card's mode: markdown, the text as HTML, or as it is.
-  text(id, text, mode) {
-    if (mode === "html") return TextView.html(id, text).selectable(true);
-    if (mode === "raw") return TextView.markdown(id, fence(text)).selectable(true);
-    return TextView.markdown(id, text).selectable(true);
+  copy(cx, key, text) {
+    cx.write_to_clipboard(text);
+    this.copied = key;
+    cx.notify();
+    cx.timer.after(1500, (cx) => { if (this.copied === key) { this.copied = null; cx.notify(); } });
   }
 
   tool(t, card, p, i) {
@@ -214,10 +223,10 @@ export default class KChat extends View {
     const state = p.result == null ? "…" : p.error ? "✗" : "✓";
     const row = h_flex()
       .id(`tool-${id}`)
-      .h(22)
+      .h(24)
       .px(6)
       .gap(6)
-      .rounded(5)
+      .rounded(6)
       .items_center()
       .text_size(11.5)
       .cursor_pointer()
@@ -232,43 +241,48 @@ export default class KChat extends View {
     const result = p.result == null ? "(no result yet)" : p.result.length > 6000 ? p.result.slice(0, 6000) + `\n… (${p.result.length - 6000} more characters)` : p.result;
     return v_flex().gap(4)
       .child(row)
-      .child(v_flex().ml(16).p(6).gap(6).rounded(6).bg(t.background).border_1().border_color(t.border).text_size(11)
+      .child(v_flex().ml(16).gap(4).text_size(11)
         .child(TextView.markdown(`in-${id}`, fence(input)).selectable(true))
-        .child(div().h(1).bg(t.border))
         .child(TextView.markdown(`out-${id}`, fence(result)).selectable(true)));
   }
 
+  // One message, as a Tide comment: who and when on top, the text under it.
   card(t, card) {
     if (card.kind === "note") {
-      return div().px(10).py(2).text_size(11).text_color(t.dim).truncate().child(card.text.replace(/\s+/g, " "));
+      return h_flex().px(4).gap(8).text_size(11).text_color(t.dim)
+        .child(div().flex_none().child(when(card.at)))
+        .child(div().flex_1().min_w(0).truncate().child(card.text.replace(/\s+/g, " ")));
     }
-    const mode = this.modes.get(card.key) ?? this.mode;
-    if (card.kind === "user") {
-      return h_flex().w_full().justify_end().pl(40).child(
-        v_flex().max_w_full().min_w(0).px(12).py(8).gap(4).rounded(12).bg(t.selected).border_1().border_color(t.border)
-          .child(h_flex().gap(6).items_center().text_size(10.5).text_color(t.dim)
-            .child(div().font_semibold().child("You"))
-            .when(card.images > 0, (el) => el.child(div().child(`🖼 ${card.images}`)))
-            .child(div().flex_1())
-            .child(this.modeButtons(t, card.key)))
-          // What a person typed keeps its line breaks: markdown would join single ones.
-          .when(Boolean(card.text), (el) => el.child(this.text(`u-${card.key}`, mode === "md" ? card.text.replace(/([^\n])\n(?=[^\n])/g, "$1  \n") : card.text, mode))));
-    }
-    const parts = card.parts.map((p, i) => (p.kind === "tool" ? this.tool(t, card, p, i) : this.text(`a-${card.key}-${i}`, p.text, mode)));
-    const usage = usageLine(card.usage);
-    return h_flex().w_full().pr(24).child(
-      v_flex().w_full().min_w(0).px(12).py(8).gap(6).rounded(12).bg(t.surface).border_1().border_color(t.border).shadow_sm()
-        .child(h_flex().gap(6).items_center().text_size(10.5).text_color(t.dim)
-          .child(div().font_semibold().child("Claude"))
-          .when(Boolean(card.model), (el) => el.child(div().child(card.model.replace(/^claude-/, ""))))
-          .child(div().flex_1())
-          .child(this.modeButtons(t, card.key)))
-        .children(parts)
-        .when(Boolean(usage), (el) => el.child(div().text_size(10).text_color(t.dim).child(usage))));
+    const mine = card.kind === "user";
+    const text = mine ? card.text : card.parts.filter((p) => p.kind === "text").map((p) => p.text).join("\n\n");
+    const body = mine
+      // What a person typed keeps its line breaks: markdown would join single ones.
+      ? (card.text ? [TextView.markdown(`u-${card.key}`, card.text.replace(/([^\n])\n(?=[^\n])/g, "$1  \n")).selectable(true)] : [])
+      : card.parts.map((p, i) => (p.kind === "tool" ? this.tool(t, card, p, i) : TextView.markdown(`a-${card.key}-${i}`, p.text).selectable(true)));
+    const copied = this.copied === card.key;
+    return v_flex().w_full().px(11).py(9).gap(6).rounded(8).bg(t.surface).border_1().border_color(t.border).text_size(12.5)
+      .child(h_flex().gap(8).items_center().text_size(11.5)
+        .child(div().flex_none().font_semibold().text_color(t.accent).child(`@${mine ? this.me : "claude"}`))
+        .child(div().flex_none().text_color(t.dim).child(when(card.at)))
+        .when(!mine && Boolean(card.model), (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(card.model.replace(/^claude-/, ""))))
+        .when(mine && card.images > 0, (el) => el.child(div().flex_none().text_color(t.dim).child(`🖼 ${card.images}`)))
+        .child(div().flex_1())
+        .when(Boolean(text), (el) => el.child(div()
+          .id(`copy-${card.key}`)
+          .px(3)
+          .rounded(4)
+          .text_size(11)
+          .cursor_pointer()
+          .text_color(copied ? t.accent : t.dim)
+          .hover((s) => s.text_color(t.accent))
+          .tooltip("Copy this message")
+          .on_click((_e, cx) => this.copy(cx, card.key, text))
+          .child(copied ? "✓ Copied" : "Copy"))))
+      .children(body);
   }
 
   placeholder(t, text) {
-    return v_flex().flex_1().items_center().justify_center().p(24).child(div().text_size(12).text_color(t.dim).text_center().child(text));
+    return v_flex().flex_1().min_h(0).items_center().justify_center().p(24).child(div().text_size(12).text_color(t.dim).text_center().child(text));
   }
 
   render(cx) {
@@ -278,13 +292,32 @@ export default class KChat extends View {
     const cards = this.chat.cards;
     const shown = cards.slice(-this.show);
     const earlier = this.hasEarlier();
+    const live = address ? terminals().find((x) => x.address === address) : null;
+    const blocked = live?.status === "blocked";
+    const back = this.terminalChild();
 
-    const header = h_flex().h(36).px(12).gap(8).flex_none().items_center().border_b(1).border_color(t.border)
-      .child(div().text_size(12).font_semibold().text_color(t.foreground).flex_none().child("Chat"))
-      .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim)
-        .child([this.chat.title, info?.where, address].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(" · ")))
-      .when(this.chat.cost?.usd != null, (el) => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(`$${this.chat.cost.usd.toFixed(2)}`)))
-      .child(this.modeButtons(t, null));
+    const header = h_flex().h(38).px(12).gap(8).flex_none().items_center().border_b(1).border_color(t.border)
+      .child(div().flex_none().text_size(12).font_semibold().text_color(t.foreground).child("💬"))
+      .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.muted)
+        .child([this.chat.title, info?.where, address].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(" · ") || "Chat"))
+      .when(this.chat.cost?.usd != null, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(`$${this.chat.cost.usd.toFixed(2)}`)))
+      .when(cards.length > 0, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(String(cards.length))))
+      .when(Boolean(back), (el) => el.child(div()
+        .id("to-terminal")
+        .h(24)
+        .px(8)
+        .flex()
+        .items_center()
+        .rounded(6)
+        .border(1)
+        .border_color(t.border)
+        .text_size(11.5)
+        .text_color(t.muted)
+        .cursor_pointer()
+        .hover((s) => s.text_color(t.foreground).bg(t.hover))
+        .tooltip("Show the terminal")
+        .on_click(() => this.toTerminal())
+        .child("Terminal")));
 
     let body;
     if (!address) body = this.placeholder(t, "Focus a Claude Code terminal to see its conversation here.");
@@ -296,21 +329,24 @@ export default class KChat extends View {
     else {
       const more = div()
         .id("earlier")
-        .py(4)
-        .text_size(11)
-        .text_center()
+        .py(5)
+        .px(9)
+        .rounded(8)
+        .border(1)
+        .border_dashed()
+        .border_color(t.border)
+        .text_size(11.5)
         .text_color(t.dim)
         .when(cards.length > this.show, (el) => el.cursor_pointer().hover((s) => s.text_color(t.foreground))
           .on_click((_e, cx) => { this.show += SHOW; this.follow = false; cx.notify(); }))
         .child(cards.length > this.show
-          ? `Show earlier (${cards.length - this.show} more)`
+          ? `⌃ Show earlier (${cards.length - this.show} more)`
           : `The end of a ${mb(this.size)} transcript: its last ${mb(FIRST)}`);
       body = div().flex_1().min_h(0).relative()
         .child(v_flex()
           .id("cards")
           .size_full()
-          .px(10)
-          .py(10)
+          .p(12)
           .gap(10)
           .overflow_y_scrollbar()
           .track_scroll(this.scroll)
@@ -319,7 +355,7 @@ export default class KChat extends View {
             if ((e.delta?.y ?? 0) > 0 && this.follow) { this.follow = false; cx.notify(); }
           })
           .when(earlier, (el) => el.child(more))
-          .children(shown.map((c) => div().id(`card-${c.key}`).w_full().child(this.card(t, c))))
+          .children(shown.map((c) => div().id(`card-${c.key}`).w_full().flex_none().child(this.card(t, c))))
           .child(div().h(1).flex_none()))
         .when(!this.follow, (el) => el.child(div()
           .id("latest")
@@ -339,21 +375,39 @@ export default class KChat extends View {
           .child("↓ Latest")));
     }
 
-    const composer = h_flex().p(8).gap(8).flex_none().items_end().border_t(1).border_color(t.border)
-      .child(div().flex_1().min_w(0).rounded(8).border_1().border_color(t.input).bg(t.background).px(8).py(6).text_size(13)
-        .child(Textarea.new(this.input)))
-      .child(div()
-        .id("send")
-        .h(30)
-        .px(12)
-        .rounded(8)
-        .flex()
-        .items_center()
-        .text_size(12)
-        .font_medium()
-        .when(Boolean(address), (el) => el.bg(t.solid).text_color(t.solid_foreground).cursor_pointer().on_click((_e, cx) => this.send(cx)))
-        .when(!address, (el) => el.bg(t.hover).text_color(t.dim))
-        .child("Send"));
+    // Claude is asking something only the terminal can answer (a permission, a choice).
+    const ask = div()
+      .id("blocked")
+      .mx(12)
+      .mb(8)
+      .px(10)
+      .py(6)
+      .rounded(8)
+      .border(1)
+      .border_color(t.blocked)
+      .bg(t.blocked + "1a")
+      .text_size(12)
+      .text_color(t.foreground)
+      .when(Boolean(back), (el) => el.cursor_pointer().on_click(() => this.toTerminal()))
+      .child(back ? "Claude is waiting for you in the terminal (a permission or a choice). Click to answer it there." : "Claude is waiting for you in the terminal (a permission or a choice).");
+
+    const composer = v_flex().pt(10).flex_none().border_t(1).border_color(t.border).bg(t.surface)
+      .when(blocked, (el) => el.child(ask))
+      .child(h_flex().px(12).pb(12).gap(8).items_end()
+        .child(div().flex_1().min_w(0).rounded(8).border_1().border_color(t.input).bg(t.background).px(8).py(6).text_size(13)
+          .child(Textarea.new(this.input)))
+        .child(div()
+          .id("send")
+          .h(30)
+          .px(12)
+          .rounded(8)
+          .flex()
+          .items_center()
+          .text_size(12)
+          .font_medium()
+          .when(Boolean(address), (el) => el.bg(t.solid).text_color(t.solid_foreground).cursor_pointer().on_click((_e, cx) => this.send(cx)))
+          .when(!address, (el) => el.bg(t.hover).text_color(t.dim))
+          .child("Send")));
 
     return v_flex().size_full().min_h(0).bg(t.canvas ?? t.chrome).text_color(t.foreground).text_size(13)
       .child(header)

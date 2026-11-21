@@ -65,20 +65,28 @@ test("Chat turns a transcript into user, AI and note cards", () => {
     L({ type: "cost-state", totalCostUSD: 1.25 }),
     L({ type: "ai-title", aiTitle: "k-chat work" }),
   ]);
-  assert.deepEqual(c.cards.map((k) => k.kind), ["user", "ai", "user", "note"]);
+  // One card per reply: the tool call stays with the text before it.
+  assert.deepEqual(c.cards.map((k) => k.kind), ["user", "ai", "ai", "user", "note"]);
   assert.equal(c.cards[0].text, "/tide:work 290");
-  const ai = c.cards[1];
-  assert.equal(ai.parts.length, 3);
-  assert.deepEqual(ai.parts[0], { kind: "text", text: "Reading the card.", msg: "m1" });
-  assert.equal(ai.parts[1].kind, "tool");
-  assert.equal(ai.parts[1].summary, "task show 290");
-  assert.equal(ai.parts[1].result, "ok");
-  assert.equal(ai.parts[2].text, "**Done.**\n\nSecond paragraph.");
-  assert.equal(ai.model, "claude-opus-5-5");
-  assert.equal(usageLine(ai.usage), "context 2.0k · out 300");
-  assert.equal(c.cards[3].text, "Task notification: Monitor fired");
+  const [, first, second] = c.cards;
+  assert.equal(first.parts.length, 2);
+  assert.deepEqual(first.parts[0], { kind: "text", text: "Reading the card.", msg: "m1" });
+  assert.equal(first.parts[1].kind, "tool");
+  assert.equal(first.parts[1].summary, "task show 290");
+  assert.equal(first.parts[1].result, "ok");
+  assert.equal(second.parts.length, 1);
+  assert.equal(second.parts[0].text, "**Done.**\n\nSecond paragraph.");
+  assert.equal(second.model, "claude-opus-5-5");
+  assert.equal(usageLine(second.usage), "context 2.0k · out 300");
+  assert.equal(c.cards[4].text, "Task notification: Monitor fired");
   assert.equal(c.cost.usd, 1.25);
   assert.equal(c.title, "k-chat work");
+});
+
+test("Chat keeps each card's time", () => {
+  const c = new Chat();
+  c.push([user("u", "hi", { timestamp: "2026-11-22T00:12:03.000Z" }), asst("a", "m", [{ type: "text", text: "yo" }], { timestamp: "2026-11-22T00:12:40.000Z" })]);
+  assert.deepEqual(c.cards.map((k) => k.at), ["2026-11-22T00:12:03.000Z", "2026-11-22T00:12:40.000Z"]);
 });
 
 test("Chat takes a turn split across two pushes", () => {
@@ -86,10 +94,10 @@ test("Chat takes a turn split across two pushes", () => {
   c.push([user("u1", "go"), asst("a1", "m1", [{ type: "tool_use", id: "t", name: "Read", input: { file_path: "/x" } }])]);
   assert.equal(c.cards[1].parts[0].result, null);
   c.push([user("r", [{ type: "tool_result", tool_use_id: "t", content: [{ type: "text", text: "body" }], is_error: true }]), asst("a2", "m2", [{ type: "text", text: "hi" }])]);
-  assert.equal(c.cards.length, 2);
+  assert.equal(c.cards.length, 3);
   assert.equal(c.cards[1].parts[0].result, "body");
   assert.equal(c.cards[1].parts[0].error, true);
-  assert.equal(c.cards[1].parts[1].text, "hi");
+  assert.equal(c.cards[2].parts[0].text, "hi");
 });
 
 test("Chat unwraps a pasted message", () => {
@@ -143,4 +151,48 @@ test("READ reads the tail, then only what was added", () => {
   writeFileSync(f, "x\n");
   assert.equal(sh(READ, [f, "15", "100"]), "2 0\nx\n");
   assert.equal(sh(READ, [f + ".none", "0", "100"]), "missing\n");
+});
+
+import { withStack, canSwitch, showingCards, showCards, STACK, CARDS } from "../mods/k-tabs/chat.js";
+
+const kmain = () => ({
+  id: "root", type: "row", children: [
+    { id: "sidebar", type: "column", children: [] },
+    { id: "work", type: "column", children: [
+      { id: "work-body", type: "row", children: [
+        { id: "main", type: "block", size: { weight: 1 }, content: { tab: "active", pane: { radius: 10, border: { width: 1, color: "border" } } } },
+        { id: "panel", type: "column", hidden: true, children: [] },
+      ] },
+    ] },
+    { id: "bc27", type: "block", content: { mod: "k-chat" }, size: { px: 480 } },
+  ],
+});
+
+test("withStack puts the tab block and k-chat in a stack, and drops a docked k-chat", () => {
+  const next = withStack(kmain());
+  const body = next.children[1].children[0];
+  assert.equal(body.children[0].id, STACK);
+  assert.equal(body.children[0].type, "stack");
+  assert.equal(body.children[0].active, CARDS);
+  assert.deepEqual(body.children[0].size, { weight: 1 });
+  assert.equal(body.children[0].children[0].id, "main");
+  assert.equal(body.children[0].children[0].size, undefined);
+  assert.deepEqual(body.children[0].children[1].content, { mod: "k-chat" });
+  assert.equal(next.children.length, 2, "the docked k-chat block is gone");
+  assert.equal(withStack({ id: "root", type: "row", children: [] }), null);
+});
+
+test("Cards | Terminal: layout.set the first time, layout.select after", () => {
+  const calls = [];
+  const run = (name, args) => calls.push([name, args]);
+  assert.equal(canSwitch("main", kmain()), false, "Herdr's own layouts can't change structure");
+  assert.equal(canSwitch("k-main", kmain()), true);
+  showCards(run, kmain(), true);
+  assert.equal(calls[0][0], "layout.set");
+  assert.deepEqual(calls[1], ["k-chat.focus", undefined]);
+  const set = calls[0][1].layout;
+  assert.equal(showingCards(set), true);
+  calls.length = 0;
+  showCards(run, set, false);
+  assert.deepEqual(calls, [["layout.select", { stack: STACK, child: "main" }]]);
 });

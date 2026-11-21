@@ -118,8 +118,9 @@ function userText(raw) {
 
 // A transcript's cards, built a line at a time so polling can feed it only what's new.
 // Cards: { key, kind: "user" | "ai" | "note", ... }
-//   user: { text, images }    note: { text }
-//   ai:   { parts: [{ kind: "text", text } | { kind: "tool", id, name, summary, input, result, error }], usage, model }
+//   user: { at, text, images }    note: { at, text }
+// A Claude card is one reply: its text, then the tool calls it made before the next text.
+//   ai:   { at, parts: [{ kind: "text", text } | { kind: "tool", id, name, summary, input, result, error }], usage, model }
 export class Chat {
   constructor() {
     this.cards = [];
@@ -139,10 +140,11 @@ export class Chat {
     this.version++;
   }
 
-  ai(d) {
+  // A Claude card: each reply's text starts one; tool calls go in the card before them.
+  ai(d, fresh) {
     const last = this.cards.at(-1);
-    if (last?.kind === "ai") return last;
-    const card = { key: `ai-${d.uuid ?? this.cards.length}`, kind: "ai", parts: [], usage: null, model: null };
+    if (!fresh && last?.kind === "ai") return last;
+    const card = { key: `ai-${d.uuid ?? ""}-${this.cards.length}`, kind: "ai", at: d.timestamp ?? null, parts: [], usage: null, model: null };
     this.cards.push(card);
     return card;
   }
@@ -154,22 +156,22 @@ export class Chat {
     if (d.isSidechain) return;
     const content = d.message?.content;
     if (d.type === "assistant") {
-      const blocks = Array.isArray(content) ? content : [];
-      // Only thinking (hidden) and nothing else: no card of its own yet.
-      if (!blocks.some((c) => (c.type === "text" && c.text?.trim()) || c.type === "tool_use") && this.cards.at(-1)?.kind !== "ai") return;
-      const card = this.ai(d);
-      if (d.message?.usage) card.usage = d.message.usage;
-      if (d.message?.model && d.message.model !== "<synthetic>") card.model = d.message.model;
-      for (const c of blocks) {
+      const id = d.message?.id;
+      for (const c of Array.isArray(content) ? content : []) {
         if (c.type === "text" && c.text?.trim()) {
-          const prev = card.parts.at(-1);
+          const last = this.cards.at(-1);
+          const prev = last?.kind === "ai" ? last.parts.at(-1) : null;
           // A reply streamed as several lines of one message reads as one block.
-          if (prev?.kind === "text" && d.message?.id && prev.msg === d.message.id) prev.text += "\n\n" + c.text;
-          else card.parts.push({ kind: "text", text: c.text, msg: d.message?.id });
+          if (prev?.kind === "text" && id && prev.msg === id) { prev.text += "\n\n" + c.text; continue; }
+          const card = this.ai(d, true);
+          card.parts.push({ kind: "text", text: c.text, msg: id });
+          this.meta(card, d);
         } else if (c.type === "tool_use") {
+          const card = this.ai(d, false);
           const part = { kind: "tool", id: c.id, name: c.name, summary: toolSummary(c.name, c.input), input: c.input, result: null, error: false };
           card.parts.push(part);
           this.tools.set(c.id, part);
+          this.meta(card, d);
         }
       }
       return;
@@ -188,8 +190,13 @@ export class Chat {
     const images = Array.isArray(content) ? content.filter((c) => c.type === "image").length : 0;
     const u = userText(texts.join("\n\n"));
     if (!u && !images) return;
-    if (u?.note) { this.cards.push({ key: `note-${d.uuid ?? this.cards.length}`, kind: "note", text: u.note }); return; }
-    this.cards.push({ key: `user-${d.uuid ?? this.cards.length}`, kind: "user", text: u?.text ?? "", images });
+    if (u?.note) { this.cards.push({ key: `note-${d.uuid ?? this.cards.length}`, kind: "note", at: d.timestamp ?? null, text: u.note }); return; }
+    this.cards.push({ key: `user-${d.uuid ?? this.cards.length}`, kind: "user", at: d.timestamp ?? null, text: u?.text ?? "", images });
+  }
+
+  meta(card, d) {
+    if (d.message?.usage) card.usage = d.message.usage;
+    if (d.message?.model && d.message.model !== "<synthetic>") card.model = d.message.model;
   }
 }
 

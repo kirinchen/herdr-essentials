@@ -1,4 +1,4 @@
-// k-chat (herdr-essentials): a Claude Code terminal's conversation as cards, one per message,
+// k-chat (herdr-essentials): a Claude Code terminal's conversation as cards, one per message of yours and one per reply,
 // above the terminal itself (k-tabs' Cards | Terminal switch puts them there): you type, answer
 // dialogs and run / commands in the terminal strip under the cards, as always.
 // Reads the transcript Claude Code writes (~/.claude/projects/<folder>/<session>.jsonl), not

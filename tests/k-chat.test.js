@@ -65,20 +65,19 @@ test("Chat turns a transcript into user, AI and note cards", () => {
     L({ type: "cost-state", totalCostUSD: 1.25 }),
     L({ type: "ai-title", aiTitle: "k-chat work" }),
   ]);
-  // One card per reply: the tool call stays with the text before it.
-  assert.deepEqual(c.cards.map((k) => k.kind), ["user", "ai", "ai", "user", "note"]);
+  // One card per turn: the text, the tool call and the text after it are one reply.
+  assert.deepEqual(c.cards.map((k) => k.kind), ["user", "ai", "user", "note"]);
   assert.equal(c.cards[0].text, "/tide:work 290");
-  const [, first, second] = c.cards;
-  assert.equal(first.parts.length, 2);
+  const [, first] = c.cards;
+  assert.equal(first.parts.length, 3);
   assert.deepEqual(first.parts[0], { kind: "text", text: "Reading the card.", msg: "m1" });
   assert.equal(first.parts[1].kind, "tool");
   assert.equal(first.parts[1].summary, "task show 290");
   assert.equal(first.parts[1].result, "ok");
-  assert.equal(second.parts.length, 1);
-  assert.equal(second.parts[0].text, "**Done.**\n\nSecond paragraph.");
-  assert.equal(second.model, "claude-opus-5-5");
-  assert.equal(usageLine(second.usage), "context 2.0k · out 300");
-  assert.equal(c.cards[4].text, "Task notification: Monitor fired");
+  assert.equal(first.parts[2].text, "**Done.**\n\nSecond paragraph.");
+  assert.equal(first.model, "claude-opus-5-5");
+  assert.equal(usageLine(first.usage), "context 2.0k · out 300");
+  assert.equal(c.cards[3].text, "Task notification: Monitor fired");
   assert.equal(c.cost.usd, 1.25);
   assert.equal(c.title, "k-chat work");
 });
@@ -94,10 +93,27 @@ test("Chat takes a turn split across two pushes", () => {
   c.push([user("u1", "go"), asst("a1", "m1", [{ type: "tool_use", id: "t", name: "Read", input: { file_path: "/x" } }])]);
   assert.equal(c.cards[1].parts[0].result, null);
   c.push([user("r", [{ type: "tool_result", tool_use_id: "t", content: [{ type: "text", text: "body" }], is_error: true }]), asst("a2", "m2", [{ type: "text", text: "hi" }])]);
-  assert.equal(c.cards.length, 3);
+  assert.equal(c.cards.length, 2);
   assert.equal(c.cards[1].parts[0].result, "body");
   assert.equal(c.cards[1].parts[0].error, true);
-  assert.equal(c.cards[2].parts[0].text, "hi");
+  assert.equal(c.cards[1].parts[1].text, "hi");
+});
+
+test("Chat starts another card only after a message of yours", () => {
+  const c = new Chat();
+  c.push([
+    user("u1", "go"),
+    asst("a1", "m1", [{ type: "text", text: "one" }]),
+    asst("a2", "m2", [{ type: "tool_use", id: "t", name: "Read", input: { file_path: "/x" } }]),
+    user("r", [{ type: "tool_result", tool_use_id: "t", content: "body" }]),
+    asst("a3", "m3", [{ type: "text", text: "two" }]),
+    asst("a4", "m4", [{ type: "text", text: "three" }]),
+    user("u2", "more"),
+    asst("a5", "m5", [{ type: "text", text: "four" }]),
+  ]);
+  assert.deepEqual(c.cards.map((k) => k.kind), ["user", "ai", "user", "ai"]);
+  assert.deepEqual(c.cards[1].parts.map((p) => p.text ?? p.name), ["one", "Read", "two", "three"]);
+  assert.deepEqual(c.cards[3].parts.map((p) => p.text), ["four"]);
 });
 
 test("Chat unwraps a pasted message", () => {

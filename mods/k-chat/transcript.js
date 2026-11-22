@@ -186,7 +186,8 @@ function userText(raw) {
 // A transcript's cards, built a line at a time so polling can feed it only what's new.
 // Cards: { key, kind: "user" | "ai" | "note", ... }
 //   user: { at, text, images }    note: { at, text }
-// A Claude card is one reply: its text, then the tool calls it made before the next text.
+// A Claude card is one turn: everything Claude wrote and ran from one message of yours to the
+// next (text, tool calls, more text), so a reply reads as one card however many steps it took.
 //   ai:   { at, parts: [{ kind: "text", text } | { kind: "tool", id, name, summary, input, result, error }], usage, model }
 export class Chat {
   constructor() {
@@ -207,10 +208,10 @@ export class Chat {
     this.version++;
   }
 
-  // A Claude card: each reply's text starts one; tool calls go in the card before them.
-  ai(d, fresh) {
+  // The turn's card: the last one while it is still Claude's, else a new one.
+  ai(d) {
     const last = this.cards.at(-1);
-    if (!fresh && last?.kind === "ai") return last;
+    if (last?.kind === "ai") return last;
     const card = { key: `ai-${d.uuid ?? ""}-${this.cards.length}`, kind: "ai", at: d.timestamp ?? null, parts: [], usage: null, model: null };
     this.cards.push(card);
     return card;
@@ -230,11 +231,11 @@ export class Chat {
           const prev = last?.kind === "ai" ? last.parts.at(-1) : null;
           // A reply streamed as several lines of one message reads as one block.
           if (prev?.kind === "text" && id && prev.msg === id) { prev.text += "\n\n" + c.text; continue; }
-          const card = this.ai(d, true);
+          const card = this.ai(d);
           card.parts.push({ kind: "text", text: c.text, msg: id });
           this.meta(card, d);
         } else if (c.type === "tool_use") {
-          const card = this.ai(d, false);
+          const card = this.ai(d);
           const part = { kind: "tool", id: c.id, name: c.name, summary: toolSummary(c.name, c.input), input: c.input, result: null, error: false };
           card.parts.push(part);
           this.tools.set(c.id, part);

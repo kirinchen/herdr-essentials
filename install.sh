@@ -17,7 +17,9 @@ if [ "$MODE" = link ]; then
     MODE=copy; echo "這台不能建 symlink(Windows 要開「開發人員模式」),改用複製模式:之後 repo 有改動要重跑 ./install.sh" >&2
   fi; rm -rf "$t"
 fi
+# 只裝有 mod.json 的資料夾:已拿掉的 mod 可能在 repo 裡留下沒進版控的空殼(gpui-kit.d.ts 之類)。
 for m in "$HERE"/mods/*/; do
+  [ -f "$m/mod.json" ] || continue
   name=$(basename "$m"); src=${m%/}; dst=$H/mods/$name
   if [ -L "$dst" ] || [ -d "$dst" ]; then rm -rf "$dst"; fi    # 不管之前是 copy 還是 link,都重做
   if [ "$MODE" = link ]; then ln -s "$src" "$dst"; echo "mod: $name -> $src"
@@ -50,4 +52,4 @@ if ! grep -q '"k-agents"' "$K"; then
   sed -i.bak -E 's/"mod": *"agents"/"mod": "k-agents"/g' "$K" && rm -f "$K.bak"
   grep -q '"k-agents"' "$K" && echo "layout: k-main 換成 k-agents(右鍵 Copy address)" || echo "layout: 找不到 agents block,k-agents 沒換上" >&2
 fi
-command -v herdr-app >/dev/null && for m in "$HERE"/mods/*/; do herdr-app check "$H/mods/$(basename "$m")" 2>&1 | grep -v libEGL; done
+command -v herdr-app >/dev/null && for m in "$HERE"/mods/*/; do [ -f "$m/mod.json" ] || continue; herdr-app check "$H/mods/$(basename "$m")" 2>&1 | grep -v libEGL || true; done

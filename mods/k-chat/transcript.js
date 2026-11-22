@@ -25,7 +25,8 @@ d="$HOME/.claude"; pid="$1"; sid="$2"; cwd="$3"; known=""
 s="$d/sessions/$pid.json"
 if [ -n "$pid" ] && [ -f "$s" ]; then
   x=$(sed -n 's/.*"sessionId":"\\([^"]*\\)".*/\\1/p' "$s"); [ -n "$x" ] && { sid="$x"; known=1; }
-  c=$(sed -n 's/.*"cwd":"\\([^"]*\\)".*/\\1/p' "$s"); [ -n "$c" ] && cwd="$c"
+  # JSON escapes a Windows path's backslashes (C:\\\\Users): one each, as the folder name has.
+  c=$(sed -n 's/.*"cwd":"\\([^"]*\\)".*/\\1/p' "$s" | sed 's/\\\\\\\\/\\\\/g'); [ -n "$c" ] && cwd="$c"
 fi
 p="$d/projects/$(printf %s "$cwd" | sed 's/[^A-Za-z0-9]/-/g')"
 f=""
@@ -49,6 +50,72 @@ echo "$s $o"
 [ "$o" -lt "$s" ] && tail -c +$((o + 1)) "$f" | head -c "$n"
 exit 0
 `;
+
+// The same two reads on Windows, in PowerShell (no sh there): a script with its arguments in it,
+// run with -EncodedCommand so no quoting can get in the way on the way there.
+const psq = (s) => `'${String(s ?? "").replace(/['\u2018\u2019\u201a\u201b]/g, "$&$&")}'`;
+
+export const resolvePs = (pid, sid, cwd) => `
+$d = Join-Path $HOME '.claude'; $p = ${psq(pid)}; $sid = ${psq(sid)}; $cwd = ${psq(cwd)}; $known = $false
+$s = Join-Path $d "sessions\\$p.json"
+if ($p -and (Test-Path -LiteralPath $s)) {
+  try { $j = Get-Content -Raw -LiteralPath $s | ConvertFrom-Json
+    if ($j.sessionId) { $sid = [string]$j.sessionId; $known = $true }
+    if ($j.cwd) { $cwd = [string]$j.cwd } } catch {}
+}
+$pd = Join-Path (Join-Path $d 'projects') ($cwd -replace '[^A-Za-z0-9]', '-')
+$f = ''
+if ($sid) {
+  $f = Join-Path $pd "$sid.jsonl"
+  if (-not (Test-Path -LiteralPath $f)) {
+    $f = Get-ChildItem -LiteralPath (Join-Path $d 'projects') -Directory -ErrorAction SilentlyContinue |
+      ForEach-Object { Join-Path $_.FullName "$sid.jsonl" } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if (-not $f) { $f = '' }
+  }
+}
+if (-not $f -and -not $known) {
+  $x = Get-ChildItem -LiteralPath $pd -Filter *.jsonl -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+  if ($x) { $f = $x.FullName }
+}
+$o = [Console]::OpenStandardOutput(); $b = [Text.Encoding]::UTF8.GetBytes("$sid\`n$f\`n"); $o.Write($b, 0, $b.Length); $o.Flush()
+`;
+
+// Writes the bytes as they are: PowerShell's own output would re-encode them.
+export const readPs = (file, offset, cap) => `
+$f = ${psq(file)}; $o = [long]${psq(offset)}; $n = [long]${psq(cap)}
+$out = [Console]::OpenStandardOutput()
+function put($t) { $b = [Text.Encoding]::ASCII.GetBytes($t); $out.Write($b, 0, $b.Length) }
+if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { put "missing\`n"; $out.Flush(); exit 0 }
+$fs = [IO.File]::Open($f, 'Open', 'Read', 'ReadWrite, Delete')
+try {
+  $s = $fs.Length
+  if ($o -lt 0) { $o = [Math]::Max([long]0, $s + $o) }
+  if ($o -gt $s) { $o = [long]0 }
+  put "$s $o\`n"
+  $len = [int][Math]::Min($n, $s - $o)
+  if ($len -gt 0) {
+    $buf = New-Object byte[] $len; $fs.Position = $o; $r = 0
+    while ($r -lt $len) { $k = $fs.Read($buf, $r, $len - $r); if ($k -le 0) { break }; $r += $k }
+    $out.Write($buf, 0, $r)
+  }
+} finally { $fs.Close(); $out.Flush() }
+`;
+
+// powershell.exe's arguments for a script: -EncodedCommand takes it as base64 of UTF-16LE.
+export function powershell(script) {
+  const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const b = [];
+  for (let i = 0; i < script.length; i++) { const c = script.charCodeAt(i); b.push(c & 255, c >> 8); }
+  let out = "";
+  for (let i = 0; i < b.length; i += 3) {
+    const n = (b[i] << 16) | ((b[i + 1] ?? 0) << 8) | (b[i + 2] ?? 0);
+    out += A[(n >> 18) & 63] + A[(n >> 12) & 63] + (i + 1 < b.length ? A[(n >> 6) & 63] : "=") + (i + 2 < b.length ? A[n & 63] : "=");
+  }
+  return ["-NoProfile", "-NonInteractive", "-EncodedCommand", out];
+}
+
+// A Windows path (C:\, D:/): the terminal's machine reads with PowerShell.
+export const windowsPath = (p) => /^[A-Za-z]:[\\/]/.test(String(p ?? ""));
 
 // Bytes in a string as UTF-8, so a read offset can advance by exactly the complete lines used.
 export function utf8Length(s) {

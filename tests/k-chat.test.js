@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Chat, projectDir, resumeId, splitChunk, utf8Length, toolSummary, usageLine, fence, RESOLVE, READ } from "../mods/k-chat/transcript.js";
+import { Chat, projectDir, resumeId, splitChunk, utf8Length, toolSummary, usageLine, fence, RESOLVE, READ, resolvePs, readPs, powershell, windowsPath } from "../mods/k-chat/transcript.js";
 
 const sh = (script, args, env = {}) => {
   const r = spawnSync("sh", ["-c", script, "k-chat", ...args], { encoding: "utf8", env: { ...process.env, ...env } });
@@ -117,7 +117,9 @@ test("toolSummary picks the telling field", () => {
   assert.equal(toolSummary("X", { a: 1 }), '{"a":1}');
 });
 
-test("RESOLVE finds the transcript through ~/.claude/sessions/<pid>.json", () => {
+// Git Bash's sh prints /tmp/… where Node has C:\\…\\Temp\\…: on Windows the PowerShell tests below run.
+const onWindows = process.platform === "win32";
+test("RESOLVE finds the transcript through ~/.claude/sessions/<pid>.json", { skip: onWindows && "Windows reads with PowerShell" }, () => {
   const home = mkdtempSync(join(tmpdir(), "k-chat-"));
   const cwd = "/work/my_repo";
   const dir = join(home, ".claude", "projects", projectDir(cwd));
@@ -138,7 +140,7 @@ test("RESOLVE finds the transcript through ~/.claude/sessions/<pid>.json", () =>
   assert.equal(sh(RESOLVE, ["77", "", cwd], env), "cccccccc-1111-4222-8333-444444444444\n\n");
 });
 
-test("READ reads the tail, then only what was added", () => {
+test("READ reads the tail, then only what was added", { skip: onWindows && "Windows reads with PowerShell" }, () => {
   const f = join(mkdtempSync(join(tmpdir(), "k-chat-")), "t.jsonl");
   writeFileSync(f, "0123456789\n");
   assert.equal(sh(READ, [f, "-4", "100"]), "11 7\n789\n");
@@ -151,6 +153,73 @@ test("READ reads the tail, then only what was added", () => {
   writeFileSync(f, "x\n");
   assert.equal(sh(READ, [f, "15", "100"]), "2 0\nx\n");
   assert.equal(sh(READ, [f + ".none", "0", "100"]), "missing\n");
+});
+
+test("RESOLVE takes a Windows cwd out of its JSON escapes", { skip: onWindows && "Windows reads with PowerShell" }, () => {
+  const home = mkdtempSync(join(tmpdir(), "k-chat-"));
+  const cwd = "C:\\Users\\DDT\\Desktop\\projects\\herdr-essentials";
+  const dir = join(home, ".claude", "projects", "C--Users-DDT-Desktop-projects-herdr-essentials");
+  mkdirSync(dir, { recursive: true });
+  mkdirSync(join(home, ".claude", "sessions"), { recursive: true });
+  writeFileSync(join(dir, "dddddddd-1111-4222-8333-444444444444.jsonl"), "");
+  // No session id yet: only the folder's newest transcript, so only the right folder name finds it.
+  writeFileSync(join(home, ".claude", "sessions", "9.json"), JSON.stringify({ pid: 9, cwd }));
+  assert.equal(sh(RESOLVE, ["9", "", ""], { HOME: home }).split("\n")[1], join(dir, "dddddddd-1111-4222-8333-444444444444.jsonl"));
+  assert.equal(projectDir(cwd), "C--Users-DDT-Desktop-projects-herdr-essentials");
+});
+
+test("powershell() encodes the script as UTF-16LE base64", () => {
+  const script = "Write-Output '中文 ok'\n";
+  assert.deepEqual(powershell(script), ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")]);
+  assert.equal(powershell("ab").at(-1), Buffer.from("ab", "utf16le").toString("base64"));
+  assert.equal(powershell("abc").at(-1), Buffer.from("abc", "utf16le").toString("base64"));
+});
+
+test("windowsPath tells a Windows terminal by its folder", () => {
+  assert.equal(windowsPath("C:\\Users\\DDT"), true);
+  assert.equal(windowsPath("d:/work"), true);
+  assert.equal(windowsPath("/home/kirin"), false);
+  assert.equal(windowsPath(""), false);
+});
+
+// On Windows: the PowerShell reads, the same cases as the sh ones.
+const ps = (script, env = {}) => {
+  const r = spawnSync("powershell.exe", powershell(script), { encoding: "utf8", env: { ...process.env, ...env } });
+  assert.equal(r.status, 0, r.stderr);
+  return r.stdout;
+};
+
+test("resolvePs finds the transcript (Windows)", { skip: !onWindows && "needs powershell.exe" }, () => {
+  const home = mkdtempSync(join(tmpdir(), "k-chat-"));
+  const cwd = "C:\\work\\my_repo";
+  const dir = join(home, ".claude", "projects", projectDir(cwd));
+  mkdirSync(dir, { recursive: true });
+  mkdirSync(join(home, ".claude", "sessions"), { recursive: true });
+  const sid = "aaaaaaaa-1111-4222-8333-444444444444";
+  writeFileSync(join(dir, `${sid}.jsonl`), "");
+  writeFileSync(join(dir, "bbbbbbbb-1111-4222-8333-444444444444.jsonl"), "");
+  writeFileSync(join(home, ".claude", "sessions", "4242.json"), JSON.stringify({ pid: 4242, sessionId: sid, cwd }));
+  // $HOME in PowerShell is USERPROFILE.
+  const env = { USERPROFILE: home, HOME: home };
+  assert.equal(ps(resolvePs("4242", "", "C:\\elsewhere"), env), `${sid}\n${join(dir, sid + ".jsonl")}\n`);
+  assert.equal(ps(resolvePs("1", sid, cwd), env), `${sid}\n${join(dir, sid + ".jsonl")}\n`);
+  utimesSync(join(dir, `${sid}.jsonl`), new Date(1000), new Date(1000));
+  assert.equal(ps(resolvePs("1", "", cwd), env), `\n${join(dir, "bbbbbbbb-1111-4222-8333-444444444444.jsonl")}\n`);
+  writeFileSync(join(home, ".claude", "sessions", "77.json"), JSON.stringify({ pid: 77, sessionId: "cccccccc-1111-4222-8333-444444444444", cwd }));
+  assert.equal(ps(resolvePs("77", "", cwd), env), "cccccccc-1111-4222-8333-444444444444\n\n");
+});
+
+test("readPs reads the tail, then only what was added (Windows)", { skip: !onWindows && "needs powershell.exe" }, () => {
+  const f = join(mkdtempSync(join(tmpdir(), "k-chat-")), "t.jsonl");
+  writeFileSync(f, "0123456789\n");
+  assert.equal(ps(readPs(f, -4, 100)), "11 7\n789\n");
+  assert.equal(ps(readPs(f, -100, 100)), "11 0\n0123456789\n");
+  appendFileSync(f, "中\n");
+  assert.equal(ps(readPs(f, 11, 100)), "15 11\n中\n");
+  assert.equal(ps(readPs(f, 15, 100)), "15 15\n");
+  writeFileSync(f, "x\n");
+  assert.equal(ps(readPs(f, 15, 100)), "2 0\nx\n");
+  assert.equal(ps(readPs(f + ".none", 0, 100)), "missing\n");
 });
 
 import { withStack, canSwitch, showingCards, showCards, STACK, CARDS } from "../mods/k-tabs/chat.js";

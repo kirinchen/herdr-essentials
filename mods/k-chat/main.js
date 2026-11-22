@@ -2,12 +2,12 @@
 // shown in the terminal's place (k-tabs' Cards | Terminal switch puts it there).
 // Reads the transcript Claude Code writes (~/.claude/projects/<folder>/<session>.jsonl), not
 // the screen. Dialogs (permissions, choices) and / commands stay in the terminal: switch back
-// for those. Unix machines only (the reads go through `sh`).
+// for those. Reads go through `sh`, or PowerShell when the terminal's machine is Windows.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle, TextareaState, Textarea, TextView } from "gpui-base";
-import { exec, hc, home, focused, panes, terminals, layout, run, theme, checking, nextCommand, notify } from "herdr";
-import { Chat, resumeId, fence, splitChunk, RESOLVE, READ } from "./transcript.js";
+import { exec, hc, home, focused, panes, terminals, layout, run, theme, checking, nextCommand, notify, window } from "herdr";
+import { Chat, resumeId, fence, splitChunk, RESOLVE, READ, resolvePs, readPs, powershell, windowsPath } from "./transcript.js";
 
 const FIRST = 1_500_000; // bytes read back when a transcript opens
 const STEP = 4_000_000; // most bytes one poll reads
@@ -139,16 +139,22 @@ export default class KChat extends View {
     const claude = /claude/i.test(fg.name ?? "") || argv.slice(0, 2).some((s) => /(^|[\\/])claude(\.exe)?$|claude-code/i.test(String(s))) || t.status?.app === "claude-code";
     const where = t.labels?.where ?? t.title ?? address;
     if (!claude) return { file: null, claude: false, where };
-    const out = await exec("sh", ["-c", RESOLVE, "k-chat", String(fg.pid ?? ""), resumeId(argv) ?? "", fg.cwd ?? t.cwd ?? ""], { on: machineOf(address), timeout: 15000 });
-    const [session, file] = out.stdout.split("\n");
-    return { file: file || null, session: session || null, claude: true, where };
+    // The terminal's machine, not this window's, decides: a Windows path, or this machine is Windows.
+    const cwd = fg.cwd ?? t.cwd ?? "";
+    const on = machineOf(address);
+    const windows = windowsPath(cwd) || (!on && !cwd && window()?.platform === "windows");
+    const args = [String(fg.pid ?? ""), resumeId(argv) ?? "", cwd];
+    const out = await (windows ? exec("powershell.exe", powershell(resolvePs(...args)), { on, timeout: 15000 }) : exec("sh", ["-c", RESOLVE, "k-chat", ...args], { on, timeout: 15000 }));
+    const [session, file] = out.stdout.replace(/\r/g, "").split("\n");
+    return { file: file || null, session: session || null, claude: true, where, windows };
   }
 
   async read() {
     const file = this.info.file;
     const first = this.size === 0 && this.offset === 0 && this.chat.cards.length === 0;
     const from = first ? -FIRST : this.offset;
-    const r = await exec("sh", ["-c", READ, "k-chat", file, String(from), String(STEP)], { on: machineOf(this.address), timeout: 20000 });
+    const on = machineOf(this.address);
+    const r = await (this.info.windows ? exec("powershell.exe", powershell(readPs(file, from, STEP)), { on, timeout: 20000 }) : exec("sh", ["-c", READ, "k-chat", file, String(from), String(STEP)], { on, timeout: 20000 }));
     if (file !== this.info?.file) return;
     const nl = r.stdout.indexOf("\n");
     const head = nl < 0 ? r.stdout : r.stdout.slice(0, nl);

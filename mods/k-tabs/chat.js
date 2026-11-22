@@ -1,13 +1,17 @@
-// k-tabs: the Cards | Terminal switch. Cards (k-chat) take the terminal's place in the
-// window: the layout's `{ tab: "active" }` block goes into a stack with a k-chat block,
-// put in on the first switch (layout.set, personal layouts only: k-main, not Herdr's main).
+// k-tabs: the Cards | Terminal switch. Cards (k-chat) go above the terminal: the layout's
+// `{ tab: "active" }` block goes into a column under a k-chat block and shrinks to a strip
+// at the bottom, so Claude Code's own input box, its dialogs and a half-typed message stay
+// right there. Terminal hides the cards and gives the terminal the whole height again.
+// Written with layout.set: personal layouts only (k-main, not Herdr's main).
 
-export const STACK = "k-chat-stack";
+export const SPLIT = "k-chat-split";
 export const CARDS = "k-chat-cards";
+export const BOTTOM = 260; // px: the terminal strip under the cards, about 10 rows
+const OLD_STACK = "k-chat-stack"; // the earlier version: cards in a stack, in place of the terminal
 
 const SHIPPED = ["main", "terminals", "win98"];
 
-function find(node, id) {
+export function find(node, id) {
   if (node?.id === id) return node;
   for (const child of node?.children ?? []) {
     const found = find(child, id);
@@ -17,26 +21,38 @@ function find(node, id) {
 }
 
 const isTabBlock = (n) => n?.type === "block" && n.content?.tab === "active";
-// k-chat docked by itself (an earlier version said place: right): the stack replaces it.
+// k-chat docked by itself (an earlier version said place: right): the column replaces it.
 const isLooseChat = (n) => n?.type === "block" && n.content?.mod === "k-chat" && n.id !== CARDS;
+const sizes = ({ size, min, max, hidden }) => ({ ...(size ? { size } : {}), ...(min != null ? { min } : {}), ...(max != null ? { max } : {}), ...(hidden ? { hidden } : {}) });
+const bare = ({ size, min, max, hidden, ...rest }) => rest;
 
-// The tree with the tab block in the stack, or null when there's no tab block to put there.
-export function withStack(root) {
+// The terminal's block inside the column, sized for cards shown or hidden.
+const terminalBlock = (tab, on) => ({ ...bare(tab), size: on ? { px: BOTTOM } : { weight: 1 }, ...(on ? { min: 120 } : {}) });
+
+function split(tab, outer, on) {
+  const look = tab.content?.pane ?? {};
+  return {
+    id: SPLIT, type: "column", gap: look.gap ?? 8, ...sizes(outer),
+    children: [
+      { id: CARDS, type: "block", content: { mod: "k-chat" }, size: { weight: 1 }, radius: look.radius ?? 10, border: look.border ?? { width: 1, color: "border" }, ...(on ? {} : { hidden: true }) },
+      terminalBlock(tab, on),
+    ],
+  };
+}
+
+// The tree with the cards shown (`on`) or hidden; null when there's no tab block to put them over.
+export function withCards(root, on) {
   let found = false;
   const walk = (n) => {
-    if (isTabBlock(n) && !found) {
+    if (n?.id === SPLIT) {
       found = true;
-      const { size, min, max, hidden, ...block } = n;
-      const look = block.content?.pane ?? {};
-      return {
-        id: STACK, type: "stack", active: CARDS,
-        ...(size ? { size } : {}), ...(min != null ? { min } : {}), ...(max != null ? { max } : {}), ...(hidden ? { hidden } : {}),
-        children: [
-          block,
-          { id: CARDS, type: "block", content: { mod: "k-chat" }, radius: look.radius ?? 10, border: look.border ?? { width: 1, color: "border" } },
-        ],
-      };
+      return { ...n, children: n.children.map((c) => (c.id === CARDS ? { ...bare(c), size: { weight: 1 }, ...(on ? {} : { hidden: true }) } : isTabBlock(c) ? terminalBlock(c, on) : c)) };
     }
+    if (n?.id === OLD_STACK) {
+      const tab = n.children?.find(isTabBlock);
+      if (tab && !found) { found = true; return split(tab, n, on); }
+    }
+    if (isTabBlock(n) && !found) { found = true; return split(n, n, on); }
     if (!Array.isArray(n?.children)) return n;
     return { ...n, children: n.children.filter((c) => !isLooseChat(c)).map(walk) };
   };
@@ -44,19 +60,20 @@ export function withStack(root) {
   return found ? next : null;
 }
 
-export const canSwitch = (layoutName, root) => !SHIPPED.includes(layoutName) && Boolean(find(root, STACK) || withStack(root));
-export const showingCards = (root) => find(root, STACK)?.active === CARDS;
+// Still the earlier stack: either button puts the column in.
+export const outdated = (root) => Boolean(find(root, OLD_STACK));
+export const canSwitch = (layoutName, root) => !SHIPPED.includes(layoutName) && Boolean(withCards(root, true));
+export function showingCards(root) {
+  if (find(root, OLD_STACK)) return find(root, OLD_STACK).active === CARDS;
+  const cards = find(root, SPLIT) && find(root, CARDS);
+  return Boolean(cards && !cards.hidden);
+}
 
-// Shows the cards or the terminal; the first time, puts the stack into the layout.
+// Shows the cards over the terminal, or the terminal alone.
 export function showCards(run, root, on) {
-  if (!find(root, STACK)) {
-    if (!on) return;
-    const next = withStack(root);
-    if (!next) return;
-    run("layout.set", { layout: next });
-  } else {
-    const terminal = find(root, STACK).children?.find((c) => c.id !== CARDS)?.id;
-    if (on || terminal) run("layout.select", { stack: STACK, child: on ? CARDS : terminal });
-  }
+  const next = withCards(root, on);
+  if (!next) return;
+  run("layout.set", { layout: next });
+  // To the latest card.
   if (on) run("k-chat.focus");
 }

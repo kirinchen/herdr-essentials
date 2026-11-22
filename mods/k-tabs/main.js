@@ -4,7 +4,7 @@ import { h_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings, focused } from "herdr";
 import { attach } from "./attach.js";
 import { watchClipboard, pasteShot } from "./shot.js";
-import { canSwitch, showingCards, showCards } from "./chat.js";
+import { canSwitch, showingCards, showCards, outdated } from "./chat.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -169,17 +169,17 @@ export default class Tabs extends View {
         .tooltip("Paste the clipboard image into the terminal")
         .on_click((_e, cx) => { cx.stop_propagation(); cx.spawn(async (cx) => pasteShot(cx)); })
         .child(svg("mods/k-tabs/image.svg").size(14)).child("Paste shot")))
-      // k-tabs: Cards | Terminal, the conversation as cards (k-chat) in the terminal's place.
+      // k-tabs: Cards | Terminal, the conversation as cards (k-chat) over a strip of the terminal.
       .when(canSwitch(shared("layout"), root), el => {
         const cards = showingCards(root);
         const seg = (id, text, on, want) => div().id(id).h(22).px(8).flex().items_center().rounded(5).text_size(12)
           .bg(on ? t.raised : t.chrome).text_color(on ? t.foreground : t.muted)
           .when(!on, s => s.hover(s => s.text_color(t.foreground)))
           .on_mouse_down("left", stop)
-          .on_click((_e, cx) => { cx.stop_propagation(); if (!on) showCards(run, layout(), want); })
+          .on_click((_e, cx) => { cx.stop_propagation(); if (!on || outdated(layout())) showCards(run, layout(), want); })
           .child(text);
         return el.child(h_flex().id("chat-switch").h(26).p(2).gap(2).flex_none().items_center().rounded(7).border(1).border_color(t.border)
-          .tooltip("Cards: the agent's conversation as cards in place of the terminal")
+          .tooltip("Cards: the agent's conversation as cards, over a strip of the terminal")
           .child(seg("show-cards", "Cards", cards, true))
           .child(seg("show-terminal", "Terminal", !cards, false)));
       })

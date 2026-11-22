@@ -222,36 +222,66 @@ test("readPs reads the tail, then only what was added (Windows)", { skip: !onWin
   assert.equal(ps(readPs(f + ".none", 0, 100)), "missing\n");
 });
 
-import { withStack, canSwitch, showingCards, showCards, STACK, CARDS } from "../mods/k-tabs/chat.js";
+import { withCards, canSwitch, showingCards, showCards, SPLIT, CARDS, BOTTOM } from "../mods/k-tabs/chat.js";
 
 const kmain = () => ({
   id: "root", type: "row", children: [
     { id: "sidebar", type: "column", children: [] },
     { id: "work", type: "column", children: [
       { id: "work-body", type: "row", children: [
-        { id: "main", type: "block", size: { weight: 1 }, content: { tab: "active", pane: { radius: 10, border: { width: 1, color: "border" } } } },
+        { id: "main", type: "block", size: { weight: 1 }, content: { tab: "active", pane: { radius: 10, gap: 8, border: { width: 1, color: "border" } } } },
         { id: "panel", type: "column", hidden: true, children: [] },
       ] },
     ] },
     { id: "bc27", type: "block", content: { mod: "k-chat" }, size: { px: 480 } },
   ],
 });
+const body = (root) => root.children[1].children[0];
 
-test("withStack puts the tab block and k-chat in a stack, and drops a docked k-chat", () => {
-  const next = withStack(kmain());
-  const body = next.children[1].children[0];
-  assert.equal(body.children[0].id, STACK);
-  assert.equal(body.children[0].type, "stack");
-  assert.equal(body.children[0].active, CARDS);
-  assert.deepEqual(body.children[0].size, { weight: 1 });
-  assert.equal(body.children[0].children[0].id, "main");
-  assert.equal(body.children[0].children[0].size, undefined);
-  assert.deepEqual(body.children[0].children[1].content, { mod: "k-chat" });
+test("withCards puts k-chat over the tab block, the terminal a strip under it", () => {
+  const next = withCards(kmain(), true);
+  const col = body(next).children[0];
+  assert.equal(col.id, SPLIT);
+  assert.equal(col.type, "column");
+  assert.deepEqual(col.size, { weight: 1 });
+  assert.equal(col.gap, 8);
+  assert.equal(col.children[0].id, CARDS);
+  assert.deepEqual(col.children[0].content, { mod: "k-chat" });
+  assert.equal(col.children[0].hidden, undefined);
+  assert.equal(col.children[1].id, "main");
+  assert.deepEqual(col.children[1].size, { px: BOTTOM });
   assert.equal(next.children.length, 2, "the docked k-chat block is gone");
-  assert.equal(withStack({ id: "root", type: "row", children: [] }), null);
+  assert.equal(withCards({ id: "root", type: "row", children: [] }, true), null);
 });
 
-test("Cards | Terminal: layout.set the first time, layout.select after", () => {
+test("Terminal hides the cards and gives the terminal the height; Cards brings them back", () => {
+  const off = withCards(withCards(kmain(), true), false);
+  const col = body(off).children[0];
+  assert.equal(col.children[0].hidden, true);
+  assert.deepEqual(col.children[1].size, { weight: 1 });
+  assert.equal(col.children[1].min, undefined);
+  assert.equal(showingCards(off), false);
+  const on = withCards(off, true);
+  assert.equal(body(on).children[0].children[0].hidden, undefined);
+  assert.deepEqual(body(on).children[0].children[1].size, { px: BOTTOM });
+  assert.equal(showingCards(on), true);
+  assert.equal(body(on).children[0].children.length, 2);
+});
+
+test("the earlier stack becomes the column", () => {
+  const root = kmain();
+  const tab = body(root).children[0];
+  body(root).children[0] = { id: "k-chat-stack", type: "stack", active: CARDS, size: { weight: 1 }, children: [{ ...tab, size: undefined }, { id: CARDS, type: "block", content: { mod: "k-chat" } }] };
+  delete body(root).children[0].children[0].size;
+  assert.equal(showingCards(root), true);
+  const next = withCards(root, true);
+  const col = body(next).children[0];
+  assert.equal(col.id, SPLIT);
+  assert.deepEqual(col.size, { weight: 1 });
+  assert.deepEqual(col.children.map((c) => c.id), [CARDS, "main"]);
+});
+
+test("Cards | Terminal: layout.set each way, Herdr's own layouts left alone", () => {
   const calls = [];
   const run = (name, args) => calls.push([name, args]);
   assert.equal(canSwitch("main", kmain()), false, "Herdr's own layouts can't change structure");
@@ -263,5 +293,6 @@ test("Cards | Terminal: layout.set the first time, layout.select after", () => {
   assert.equal(showingCards(set), true);
   calls.length = 0;
   showCards(run, set, false);
-  assert.deepEqual(calls, [["layout.select", { stack: STACK, child: "main" }]]);
+  assert.equal(calls.length, 1);
+  assert.equal(showingCards(calls[0][1].layout), false);
 });

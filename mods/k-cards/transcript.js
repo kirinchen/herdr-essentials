@@ -1,6 +1,6 @@
-// k-chat: Claude Code transcripts (~/.claude/projects/<folder>/<session>.jsonl) as cards.
+// k-cards: Claude Code transcripts (~/.claude/projects/<folder>/<session>.jsonl) as cards.
 // Pure functions, no host calls: main.js reads the file, this turns lines into cards.
-// Tested by tests/k-chat.test.js.
+// Tested by tests/k-cards.test.js.
 
 // Claude Code's folder name for a cwd: every character that isn't a letter or digit becomes "-".
 export const projectDir = (cwd) => String(cwd ?? "").replace(/[^A-Za-z0-9]/g, "-");

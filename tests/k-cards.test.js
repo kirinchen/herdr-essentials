@@ -1,14 +1,14 @@
-// Tests for mods/k-chat/transcript.js (run: node --test tests/).
+// Tests for mods/k-cards/transcript.js (run: node --test tests/).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Chat, projectDir, resumeId, splitChunk, utf8Length, toolSummary, usageLine, fence, RESOLVE, READ, resolvePs, readPs, powershell, windowsPath } from "../mods/k-chat/transcript.js";
+import { Chat, projectDir, resumeId, splitChunk, utf8Length, toolSummary, usageLine, fence, RESOLVE, READ, resolvePs, readPs, powershell, windowsPath } from "../mods/k-cards/transcript.js";
 
 const sh = (script, args, env = {}) => {
-  const r = spawnSync("sh", ["-c", script, "k-chat", ...args], { encoding: "utf8", env: { ...process.env, ...env } });
+  const r = spawnSync("sh", ["-c", script, "k-cards", ...args], { encoding: "utf8", env: { ...process.env, ...env } });
   assert.equal(r.status, 0, r.stderr);
   return r.stdout;
 };
@@ -63,7 +63,7 @@ test("Chat turns a transcript into user, AI and note cards", () => {
     user("u4", "<local-command-caveat>ignore</local-command-caveat>"),
     asst("s1", "m9", [{ type: "text", text: "sidechain" }], { isSidechain: true }),
     L({ type: "cost-state", totalCostUSD: 1.25 }),
-    L({ type: "ai-title", aiTitle: "k-chat work" }),
+    L({ type: "ai-title", aiTitle: "k-cards work" }),
   ]);
   // One card per turn: the text, the tool call and the text after it are one reply.
   assert.deepEqual(c.cards.map((k) => k.kind), ["user", "ai", "user", "note"]);
@@ -79,7 +79,7 @@ test("Chat turns a transcript into user, AI and note cards", () => {
   assert.equal(usageLine(first.usage), "context 2.0k · out 300");
   assert.equal(c.cards[3].text, "Task notification: Monitor fired");
   assert.equal(c.cost.usd, 1.25);
-  assert.equal(c.title, "k-chat work");
+  assert.equal(c.title, "k-cards work");
 });
 
 test("Chat keeps each card's time", () => {
@@ -136,7 +136,7 @@ test("toolSummary picks the telling field", () => {
 // Git Bash's sh prints /tmp/… where Node has C:\\…\\Temp\\…: on Windows the PowerShell tests below run.
 const onWindows = process.platform === "win32";
 test("RESOLVE finds the transcript through ~/.claude/sessions/<pid>.json", { skip: onWindows && "Windows reads with PowerShell" }, () => {
-  const home = mkdtempSync(join(tmpdir(), "k-chat-"));
+  const home = mkdtempSync(join(tmpdir(), "k-cards-"));
   const cwd = "/work/my_repo";
   const dir = join(home, ".claude", "projects", projectDir(cwd));
   mkdirSync(dir, { recursive: true });
@@ -157,7 +157,7 @@ test("RESOLVE finds the transcript through ~/.claude/sessions/<pid>.json", { ski
 });
 
 test("READ reads the tail, then only what was added", { skip: onWindows && "Windows reads with PowerShell" }, () => {
-  const f = join(mkdtempSync(join(tmpdir(), "k-chat-")), "t.jsonl");
+  const f = join(mkdtempSync(join(tmpdir(), "k-cards-")), "t.jsonl");
   writeFileSync(f, "0123456789\n");
   assert.equal(sh(READ, [f, "-4", "100"]), "11 7\n789\n");
   assert.equal(sh(READ, [f, "-100", "100"]), "11 0\n0123456789\n");
@@ -172,7 +172,7 @@ test("READ reads the tail, then only what was added", { skip: onWindows && "Wind
 });
 
 test("RESOLVE takes a Windows cwd out of its JSON escapes", { skip: onWindows && "Windows reads with PowerShell" }, () => {
-  const home = mkdtempSync(join(tmpdir(), "k-chat-"));
+  const home = mkdtempSync(join(tmpdir(), "k-cards-"));
   const cwd = "C:\\Users\\DDT\\Desktop\\projects\\herdr-essentials";
   const dir = join(home, ".claude", "projects", "C--Users-DDT-Desktop-projects-herdr-essentials");
   mkdirSync(dir, { recursive: true });
@@ -206,7 +206,7 @@ const ps = (script, env = {}) => {
 };
 
 test("resolvePs finds the transcript (Windows)", { skip: !onWindows && "needs powershell.exe" }, () => {
-  const home = mkdtempSync(join(tmpdir(), "k-chat-"));
+  const home = mkdtempSync(join(tmpdir(), "k-cards-"));
   const cwd = "C:\\work\\my_repo";
   const dir = join(home, ".claude", "projects", projectDir(cwd));
   mkdirSync(dir, { recursive: true });
@@ -226,7 +226,7 @@ test("resolvePs finds the transcript (Windows)", { skip: !onWindows && "needs po
 });
 
 test("readPs reads the tail, then only what was added (Windows)", { skip: !onWindows && "needs powershell.exe" }, () => {
-  const f = join(mkdtempSync(join(tmpdir(), "k-chat-")), "t.jsonl");
+  const f = join(mkdtempSync(join(tmpdir(), "k-cards-")), "t.jsonl");
   writeFileSync(f, "0123456789\n");
   assert.equal(ps(readPs(f, -4, 100)), "11 7\n789\n");
   assert.equal(ps(readPs(f, -100, 100)), "11 0\n0123456789\n");
@@ -249,12 +249,12 @@ const kmain = () => ({
         { id: "panel", type: "column", hidden: true, children: [] },
       ] },
     ] },
-    { id: "bc27", type: "block", content: { mod: "k-chat" }, size: { px: 480 } },
+    { id: "bc27", type: "block", content: { mod: "k-cards" }, size: { px: 480 } },
   ],
 });
 const body = (root) => root.children[1].children[0];
 
-test("withCards puts k-chat over the tab block, the terminal a strip under it", () => {
+test("withCards puts k-cards over the tab block, the terminal a strip under it", () => {
   const next = withCards(kmain(), true);
   const col = body(next).children[0];
   assert.equal(col.id, SPLIT);
@@ -262,11 +262,11 @@ test("withCards puts k-chat over the tab block, the terminal a strip under it", 
   assert.deepEqual(col.size, { weight: 1 });
   assert.equal(col.gap, 8);
   assert.equal(col.children[0].id, CARDS);
-  assert.deepEqual(col.children[0].content, { mod: "k-chat" });
+  assert.deepEqual(col.children[0].content, { mod: "k-cards" });
   assert.equal(col.children[0].hidden, undefined);
   assert.equal(col.children[1].id, "main");
   assert.deepEqual(col.children[1].size, { px: BOTTOM });
-  assert.equal(next.children.length, 2, "the docked k-chat block is gone");
+  assert.equal(next.children.length, 2, "the docked k-cards block is gone");
   assert.equal(withCards({ id: "root", type: "row", children: [] }, true), null);
 });
 
@@ -287,7 +287,7 @@ test("Terminal hides the cards and gives the terminal the height; Cards brings t
 test("the earlier stack becomes the column", () => {
   const root = kmain();
   const tab = body(root).children[0];
-  body(root).children[0] = { id: "k-chat-stack", type: "stack", active: CARDS, size: { weight: 1 }, children: [{ ...tab, size: undefined }, { id: CARDS, type: "block", content: { mod: "k-chat" } }] };
+  body(root).children[0] = { id: "k-cards-stack", type: "stack", active: CARDS, size: { weight: 1 }, children: [{ ...tab, size: undefined }, { id: CARDS, type: "block", content: { mod: "k-cards" } }] };
   delete body(root).children[0].children[0].size;
   assert.equal(showingCards(root), true);
   const next = withCards(root, true);
@@ -304,7 +304,7 @@ test("Cards | Terminal: layout.set each way, Herdr's own layouts left alone", ()
   assert.equal(canSwitch("k-main", kmain()), true);
   showCards(run, kmain(), true);
   assert.equal(calls[0][0], "layout.set");
-  assert.deepEqual(calls[1], ["k-chat.focus", undefined]);
+  assert.deepEqual(calls[1], ["k-cards.focus", undefined]);
   const set = calls[0][1].layout;
   assert.equal(showingCards(set), true);
   calls.length = 0;

@@ -1,13 +1,13 @@
-// k-tabs: the Cards | Terminal switch. Cards (k-chat) go above the terminal: the layout's
-// `{ tab: "active" }` block goes into a column under a k-chat block and shrinks to a strip
+// k-tabs: the Cards | Terminal switch. Cards (k-cards) go above the terminal: the layout's
+// `{ tab: "active" }` block goes into a column under a k-cards block and shrinks to a strip
 // at the bottom, so Claude Code's own input box, its dialogs and a half-typed message stay
 // right there. Terminal hides the cards and gives the terminal the whole height again.
 // Written with layout.set: personal layouts only (k-main, not Herdr's main).
 
-export const SPLIT = "k-chat-split";
-export const CARDS = "k-chat-cards";
+export const SPLIT = "k-cards-split";
+export const CARDS = "k-cards-cards";
 export const BOTTOM = 260; // px: the terminal strip under the cards, about 10 rows
-const OLD_STACK = "k-chat-stack"; // the earlier version: cards in a stack, in place of the terminal
+const OLD_STACK = "k-cards-stack"; // the earlier version: cards in a stack, in place of the terminal
 
 const SHIPPED = ["main", "terminals", "win98"];
 
@@ -21,8 +21,8 @@ export function find(node, id) {
 }
 
 const isTabBlock = (n) => n?.type === "block" && n.content?.tab === "active";
-// k-chat docked by itself (an earlier version said place: right): the column replaces it.
-const isLooseChat = (n) => n?.type === "block" && n.content?.mod === "k-chat" && n.id !== CARDS;
+// k-cards docked by itself (an earlier version said place: right): the column replaces it.
+const isLooseChat = (n) => n?.type === "block" && n.content?.mod === "k-cards" && n.id !== CARDS;
 const sizes = ({ size, min, max, hidden }) => ({ ...(size ? { size } : {}), ...(min != null ? { min } : {}), ...(max != null ? { max } : {}), ...(hidden ? { hidden } : {}) });
 const bare = ({ size, min, max, hidden, ...rest }) => rest;
 
@@ -34,7 +34,7 @@ function split(tab, outer, on) {
   return {
     id: SPLIT, type: "column", gap: look.gap ?? 8, ...sizes(outer),
     children: [
-      { id: CARDS, type: "block", content: { mod: "k-chat" }, size: { weight: 1 }, radius: look.radius ?? 10, border: look.border ?? { width: 1, color: "border" }, ...(on ? {} : { hidden: true }) },
+      { id: CARDS, type: "block", content: { mod: "k-cards" }, size: { weight: 1 }, radius: look.radius ?? 10, border: look.border ?? { width: 1, color: "border" }, ...(on ? {} : { hidden: true }) },
       terminalBlock(tab, on),
     ],
   };
@@ -75,5 +75,5 @@ export function showCards(run, root, on) {
   if (!next) return;
   run("layout.set", { layout: next });
   // To the latest card.
-  if (on) run("k-chat.focus");
+  if (on) run("k-cards.focus");
 }

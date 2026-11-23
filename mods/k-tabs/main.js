@@ -169,7 +169,7 @@ export default class Tabs extends View {
         .tooltip("Paste the clipboard image into the terminal")
         .on_click((_e, cx) => { cx.stop_propagation(); cx.spawn(async (cx) => pasteShot(cx)); })
         .child(svg("mods/k-tabs/image.svg").size(14)).child("Paste shot")))
-      // k-tabs: Cards | Terminal, the conversation as cards (k-chat) over a strip of the terminal.
+      // k-tabs: Cards | Terminal, the conversation as cards (k-cards) over a strip of the terminal.
       .when(canSwitch(shared("layout"), root), el => {
         const cards = showingCards(root);
         const seg = (id, text, on, want) => div().id(id).h(22).px(8).flex().items_center().rounded(5).text_size(12)

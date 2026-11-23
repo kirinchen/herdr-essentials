@@ -1,4 +1,4 @@
-// k-chat (herdr-essentials): a Claude Code terminal's conversation as cards, one per message of yours and one per reply,
+// k-cards (herdr-essentials): a Claude Code terminal's conversation as cards, one per message of yours and one per reply,
 // above the terminal itself (k-tabs' Cards | Terminal switch puts them there): you type, answer
 // dialogs and run / commands in the terminal strip under the cards, as always.
 // Reads the transcript Claude Code writes (~/.claude/projects/<folder>/<session>.jsonl), not
@@ -12,8 +12,8 @@ import { Chat, resumeId, fence, splitChunk, RESOLVE, READ, resolvePs, readPs, po
 const FIRST = 1_500_000; // bytes read back when a transcript opens
 const STEP = 4_000_000; // most bytes one poll reads
 const SHOW = 80; // cards drawn at first; "Show earlier" adds more
-const SPLIT = "k-chat-split"; // k-tabs' column: this block over the terminal's (see k-tabs/chat.js)
-const CARDS = "k-chat-cards";
+const SPLIT = "k-cards-split"; // k-tabs' column: this block over the terminal's (see k-tabs/chat.js)
+const CARDS = "k-cards-cards";
 const BOTTOM = 260; // px: the terminal strip under the cards, as k-tabs puts it
 
 const machineOf = (address) => (address?.includes("/") ? address.split("/")[0] : null);
@@ -38,7 +38,7 @@ function when(at) {
   return d.toDateString() === new Date().toDateString() ? `${time}:${p(d.getSeconds())}` : `${d.getMonth() + 1}/${d.getDate()} ${time}`;
 }
 
-export default class KChat extends View {
+export default class KCards extends View {
   init(_props, cx) {
     this.address = null; // the terminal shown
     this.info = null; // { file, session, claude, where }
@@ -143,7 +143,7 @@ export default class KChat extends View {
     const on = machineOf(address);
     const windows = windowsPath(cwd) || (!on && !cwd && window()?.platform === "windows");
     const args = [String(fg.pid ?? ""), resumeId(argv) ?? "", cwd];
-    const out = await (windows ? exec("powershell.exe", powershell(resolvePs(...args)), { on, timeout: 15000 }) : exec("sh", ["-c", RESOLVE, "k-chat", ...args], { on, timeout: 15000 }));
+    const out = await (windows ? exec("powershell.exe", powershell(resolvePs(...args)), { on, timeout: 15000 }) : exec("sh", ["-c", RESOLVE, "k-cards", ...args], { on, timeout: 15000 }));
     const [session, file] = out.stdout.replace(/\r/g, "").split("\n");
     return { file: file || null, session: session || null, claude: true, where, windows };
   }
@@ -153,7 +153,7 @@ export default class KChat extends View {
     const first = this.size === 0 && this.offset === 0 && this.chat.cards.length === 0;
     const from = first ? -FIRST : this.offset;
     const on = machineOf(this.address);
-    const r = await (this.info.windows ? exec("powershell.exe", powershell(readPs(file, from, STEP)), { on, timeout: 20000 }) : exec("sh", ["-c", READ, "k-chat", file, String(from), String(STEP)], { on, timeout: 20000 }));
+    const r = await (this.info.windows ? exec("powershell.exe", powershell(readPs(file, from, STEP)), { on, timeout: 20000 }) : exec("sh", ["-c", READ, "k-cards", file, String(from), String(STEP)], { on, timeout: 20000 }));
     if (file !== this.info?.file) return;
     const nl = r.stdout.indexOf("\n");
     const head = nl < 0 ? r.stdout : r.stdout.slice(0, nl);

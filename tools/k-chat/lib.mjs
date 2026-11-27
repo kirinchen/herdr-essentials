@@ -12,10 +12,11 @@ export const SOURCES = {
   claude: { label: "Claude", bin: "claude", chair: "sonnet" },
   codex: { label: "Codex", bin: "codex", chair: null },
   gemini: { label: "Gemini", bin: "agy", chair: null }, // Google's Antigravity CLI
+  hermes: { label: "Hermes", bin: "hermes", chair: null }, // Nous Research's Hermes Agent (its own provider / model config)
 };
 export function source(name) {
   const n = String(name || "claude").toLowerCase();
-  const id = n === "agy" ? "gemini" : n === "claude-code" ? "claude" : n;
+  const id = n === "agy" ? "gemini" : n === "claude-code" ? "claude" : n === "hermes-agent" ? "hermes" : n;
   if (!Object.hasOwn(SOURCES, id)) throw new Error(`不認得的模型來源:${name}(有 ${Object.keys(SOURCES).join("、")})`);
   return id;
 }
@@ -69,15 +70,31 @@ export function members(list, taken = []) {
   });
 }
 
+// The chair: its source and model, and the machine it answers on (null: this one, where the runner
+// is; else through hc exec, in that machine's home). The record and the runner stay here either way.
+// Codex can't chair elsewhere: it reads its schema from a file in its folder.
+export function machineName(x) {
+  const t = String(x ?? "").trim();
+  if (!t) return null;
+  if (!/^[A-Za-z0-9][\w.-]{0,62}$/.test(t)) throw new Error(`機器名稱不對:${t}`);
+  return t;
+}
+export function chairOf(agent, model, machine) {
+  const on = machineName(machine);
+  if (on && agent === "codex") throw new Error(`Codex 不能在別台機器(${on})當主席`);
+  return { agent, model, machine: on };
+}
+export const chairLabel = (c) => `${sourceLabel(c)}${c?.machine ? `(在 ${c.machine})` : ""}`;
+
 // direct: a plain conversation, the Owner and one agent, no chair (a second member brings the chair back).
 // act: in a direct conversation, whether that agent may change files and run commands (the Owner's switch).
-export function newState({ repo, topic, title, space, list, chairAgent, chairModel, maxRounds, allowYolo, direct, act }) {
+export function newState({ repo, topic, title, space, list, chairAgent, chairModel, chairMachine, maxRounds, allowYolo, direct, act }) {
   const agent = source(chairAgent);
   if (direct && (list ?? []).length !== 1) throw new Error("一般對話要剛好一個 agent");
   return {
     direct: Boolean(direct), act: Boolean(direct && act),
     k_chat: 1, topic: slug(topic), title: title || topic, repo, space: space || path.basename(repo),
-    chair: { agent, model: modelName(chairModel) ?? SOURCES[agent].chair }, allow_yolo: allowYolo !== false, max_rounds: Number(maxRounds) > 0 ? Number(maxRounds) : 12,
+    chair: chairOf(agent, modelName(chairModel) ?? SOURCES[agent].chair, chairMachine), allow_yolo: allowYolo !== false, max_rounds: Number(maxRounds) > 0 ? Number(maxRounds) : 12,
     round: 0, status: "running", now: { phase: "idle", who: null, since: Date.now() },
     members: members(list), queue: [], todos: [], failures: 0, runner: null,
   };
@@ -87,7 +104,7 @@ export function newState({ repo, topic, title, space, list, chairAgent, chairMod
 // turns; who spoke comes between the role and the time. Either side may append to the same file.
 export const header = (s, d = new Date()) => s.direct
   ? `# ${s.title}\n\n> k-chat 一般對話 · 開始於 ${day(d)} ${clock(d)} · 對象:${s.members.map((m) => `${m.name}@${m.space}(${sourceLabel(m)})`).join("、")}\n`
-  : `# ${s.title}\n\n> k-chat 討論群 · 開始於 ${day(d)} ${clock(d)} · 主席 ${sourceLabel(s.chair)} · 成員:${s.members.map((m) => `${m.name}@${m.space}(${sourceLabel(m)})`).join("、") || "(還沒有)"}\n`;
+  : `# ${s.title}\n\n> k-chat 討論群 · 開始於 ${day(d)} ${clock(d)} · 主席 ${chairLabel(s.chair)} · 成員:${s.members.map((m) => `${m.name}@${m.space}(${sourceLabel(m)})`).join("、") || "(還沒有)"}\n`;
 export const entry = (who, text, d = new Date()) => {
   const head = who === "owner" ? "🧑 Human" : who === "chair" ? "🤖 Assistant · 🪑 主席" : `🤖 Assistant · ${who.name}@${who.space}`;
   // What someone said can't start a new message: its own # and ## headings go down to ###.
@@ -204,6 +221,8 @@ todos 把待辦逐項列出:title 一句話,repo 填負責的成員的 Space 名
 export function memberPrompt(s, m, record, turn) {
   const first = !m.session;
   const since = record.slice(Math.min(m.seen ?? 0, record.length));
+  // Hermes' read-only turn has the web only (see HERMES_READ): it should say so, not guess at files.
+  const webOnly = source(m.agent) === "hermes" ? "你這一輪只有網路搜尋,讀不到你資料夾裡的檔案;需要看檔案才能回答,就直接說要授權動手才看得到,不要猜檔案內容。" : "";
   if (s.direct) {
     const rules = `Owner(人)要跟你對話,主題「${s.title}」。你的名字是 ${m.name}(Space「${m.space}」,你在自己的資料夾 ${m.cwd} 裡)。只有你和他,沒有別的成員。
 
@@ -217,7 +236,7 @@ ${tail(since) || "(沒有新的)"}
 </record>
 
 回答 Owner 上面說的話。
-${turn.yolo ? "\nOwner 允許你動手:可以改檔、跑指令,只做他要求的範圍,做完回報改了哪些檔。" : "\n你現在只能讀(讀檔、搜尋、查網頁),不要嘗試改檔或跑指令;Owner 要你動手時,告訴他先把「可動手」打開。"}`;
+${turn.yolo ? "\nOwner 允許你動手:可以改檔、跑指令,只做他要求的範圍,做完回報改了哪些檔。" : `\n你現在只能讀(讀檔、搜尋、查網頁),不要嘗試改檔或跑指令;Owner 要你動手時,告訴他先把「可動手」打開。${webOnly}`}`;
   }
   const intro = `你被邀請進一場多 agent 討論「${s.title}」,你的名字是 ${m.name}(Space「${m.space}」,你在自己的資料夾 ${m.cwd} 裡)。Owner(人)主持,主席決定誰發言。
 
@@ -236,7 +255,7 @@ ${tail(since) || "(沒有新的)"}
 </record>
 
 ${turn.from === "owner" ? "Owner 點名你回答上面他說的話。" : `主席問你:${turn.ask}`}
-${turn.yolo ? "\n主席授權你這一輪動手(YOLO):可以改檔、跑指令,只做被要求的範圍,做完回報改了哪些檔。" : "\n這一輪只能讀,不要嘗試改檔或跑指令。"}`;
+${turn.yolo ? "\n主席授權你這一輪動手(YOLO):可以改檔、跑指令,只做被要求的範圍,做完回報改了哪些檔。" : `\n這一輪只能讀,不要嘗試改檔或跑指令。${webOnly}`}`;
 }
 
 // The agent's arguments for one turn. Read-only by default; YOLO for that turn only.
@@ -254,6 +273,10 @@ export function memberArgv(m, yolo) {
     const mode = yolo ? ["--dangerously-skip-permissions"] : AGY_READ;
     return { agent, bin: "agy", args: [...AGY, ...mode, ...model, ...(m.session ? ["--conversation", m.session] : [])], guard: yolo ? null : guard };
   }
+  if (agent === "hermes") {
+    const mode = yolo ? ["--yolo"] : ["-t", HERMES_READ];
+    return { agent, bin: "hermes", args: [...HERMES, ...mode, ...model, ...(m.session ? ["--resume", m.session] : [])], guard: yolo ? null : hermesGuard };
+  }
   const args = ["-p", "--output-format", "json", ...model];
   if (m.session) args.push("--resume", m.session);
   else if (m.fork) args.push("--resume", m.fork, "--fork-session");
@@ -266,12 +289,22 @@ const AGY = ["--input-format", "stream-json", "--output-format", "stream-json"];
 // Not `"toolPermission":"strict"`: that refuses reading too. Not `"agentMode":""`: that still writes.
 const agyDeny = (...more) => ["--sandbox", "--settings", JSON.stringify({ permissions: { deny: ["write_file(*)", "command(*)", "unsandboxed(*)", "mcp(*)", "execute_url(*)", "download_url(*)", ...more] } })];
 const AGY_READ = agyDeny(), AGY_CHAIR = agyDeny("read_file(*)", "read_url(*)"); // a chair that may read goes through files for minutes
+// Hermes: the prompt on stdin (--query-file -), JSON lines out. --source tool keeps these runs out of the
+// user's own session list (--resume still finds them). (Not --run-budget: chat through the gateway
+// refuses it, it is config.yaml's agent.run_budget_seconds.) Its tools come in toolsets only, and every
+// one with read_file also has write_file / patch; ending the turn when one shows up is too late (the
+// tool has already run). So a read-only turn has the web only, no files (memberPrompt says so);
+// hermesGuard() stays as a second line. -t can't be empty: the chair gets "todo" (a scratch list,
+// touches nothing) and runs without AGENTS.md / memory.
+const HERMES = ["chat", "--query-file", "-", "--format", "stream-json", "--source", "tool"];
+const HERMES_READ = "web", HERMES_CHAIR = ["-t", "todo", "--ignore-rules"];
 
 // The chair: no tools (Claude), nothing it may read or change (Gemini), nothing it may change (Codex). `schemaFile` holds the schema for Codex.
 export function chairArgv(chair, schema, schemaFile) {
   const agent = source(chair?.agent), model = chair?.model ? ["--model", chair.model] : [];
   if (agent === "codex") return { agent, bin: "codex", args: ["exec", "--json", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", ...model, "--output-schema", schemaFile, "-"] };
   if (agent === "gemini") return { agent, bin: "agy", args: [...AGY, ...AGY_CHAIR, ...model, "--json-schema", JSON.stringify(schema)], guard };
+  if (agent === "hermes") return { agent, bin: "hermes", args: [...HERMES, ...HERMES_CHAIR, ...model], guard: hermesGuard };
   return { agent, bin: "claude", args: ["-p", "--output-format", "json", ...model, "--tools", "", "--strict-mcp-config", "--no-session-persistence", "--json-schema", JSON.stringify(schema)] };
 }
 
@@ -288,6 +321,13 @@ export function guard(line) {
   const u = e?.event === "step_update" ? e.step_update : null;
   // A refused call carries an error; one that isn't DONE yet may still be refused.
   if (u?.step_type === "tool" && u.state === "DONE" && WRITES.test(u.tool_name ?? "") && !u.tool_info?.error) return `唯讀輪裡 agy 跑了 ${u.tool_name},這一輪作廢(請檢查它的資料夾)`;
+  return null;
+}
+// Hermes, the same: its tool_use line comes before the tool runs, so the turn ends as it asks to write.
+const HERMES_WRITES = /write|patch|edit|replace|delete|remove|rename|move|terminal|process|execute|shell|command/i;
+export function hermesGuard(line) {
+  const e = event(line);
+  if (e?.type === "tool_use" && HERMES_WRITES.test(e.name ?? "")) return `唯讀輪裡 Hermes 要用 ${e.name},這一輪作廢(請檢查它的資料夾)`;
   return null;
 }
 
@@ -311,6 +351,12 @@ export function parseReply(agent, stdout) {
     if (!r) throw new Error(`讀不懂 agy 的輸出:${out.slice(-300) || "(空的)"}`);
     if (r.status !== "SUCCESS") throw new Error(`Gemini(agy):${String(r.error || r.status).slice(0, 500)}${/authenticat/i.test(r.error ?? "") ? "(先在那台機器跑一次 agy 登入)" : ""}`);
     return { text: String(r.response ?? "").trim(), session: r.conversation_id || null, structured: r.structured_output ?? null };
+  }
+  if (agent === "hermes") {
+    const r = out.split("\n").map(event).filter((e) => e?.type === "result").pop();
+    if (!r) throw new Error(`讀不懂 Hermes 的輸出:${out.slice(-300) || "(空的)"}`);
+    if (r.error || (r.exit_code ?? 0) !== 0) throw new Error(`Hermes:${String(r.error || `exit ${r.exit_code}`).slice(0, 500)}`);
+    return { text: String(r.text ?? "").trim(), session: r.session_id || null, structured: null };
   }
   // Something may be printed before the JSON (a shell banner on another machine): take the last JSON line.
   const line = out.split("\n").reverse().find((l) => l.trim().startsWith("{")) ?? out;

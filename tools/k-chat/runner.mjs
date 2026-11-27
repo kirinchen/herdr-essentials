@@ -4,7 +4,8 @@
 // headless in its own folder (on its own machine), write the answer to doc/chat/<topic>.md.
 //
 //   runner.mjs new --repo DIR --topic NAME --members JSON [--title T] [--space S] [--say TEXT]
-//                  [--max-rounds N] [--chair-agent claude|codex|gemini] [--chair-model M] [--no-yolo]
+//                  [--max-rounds N] [--chair-agent claude|codex|gemini|hermes] [--chair-model M] [--chair-machine NAME] [--no-yolo]
+//                  (--chair-machine: the chair answers on that machine through hc exec; the record stays here)
 //                  [--direct [--act]]   --direct: a plain conversation with the one member, no chair;
 //                                      --act: that agent may change files and run commands
 //                                      make the files, print the state path
@@ -33,7 +34,7 @@ import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import * as L from "./lib.mjs";
 
-const BIN = { claude: process.env.K_CHAT_CLAUDE || "claude", codex: process.env.K_CHAT_CODEX || "codex", agy: process.env.K_CHAT_AGY || "agy" };
+const BIN = { claude: process.env.K_CHAT_CLAUDE || "claude", codex: process.env.K_CHAT_CODEX || "codex", agy: process.env.K_CHAT_AGY || "agy", hermes: process.env.K_CHAT_HERMES || "hermes" };
 const HC = process.env.K_CHAT_HC || "hc";
 const TICK = Number(process.env.K_CHAT_TICK) || 1000;
 const REOPEN = 6; // rounds an Owner message adds to a discussion that had ended
@@ -66,7 +67,7 @@ function run({ bin, args, cwd, machine, input, timeout, stop, guard }) {
   const shell = Boolean(found?.toLowerCase().endsWith(".cmd"));
   const q = (x) => (/[\s&()^]/.test(x) ? `"${x}"` : x);
   const [cmd, argv] = shell ? [q(found), args.map(q)] : machine
-    ? [HC, ["exec", "--on", machine, "--cwd", cwd, "--timeout", String(Math.min(600, Math.ceil(timeout / 1000))), "-i", "--", real, ...args]]
+    ? [HC, ["exec", "--on", machine, ...(cwd ? ["--cwd", cwd] : []), "--timeout", String(Math.min(600, Math.ceil(timeout / 1000))), "-i", "--", real, ...args]]
     : [real, args];
   return new Promise((resolve) => {
     let out = "", err = "", stopped = false, over = false, broke = null, seen = 0;
@@ -126,14 +127,21 @@ function host(statePath) {
 
   // The chair runs from an empty folder unless it is Claude (which gets no tools at all): the
   // others can't be started without theirs, so there is nothing there to read or change.
+  // On another machine it starts in that machine's home (no --cwd): it has no tools there either.
   let desk = null;
   const chair = async (schema, prompt) => {
-    let cwd = s.repo, file = null;
-    if (L.source(s.chair.agent) !== "claude") {
+    const machine = L.machineName(s.chair.machine);
+    let cwd = machine ? null : s.repo, file = null;
+    if (L.source(s.chair.agent) === "codex" && machine) throw new Error(`Codex 不能在別台機器(${machine})當主席`);
+    if (!machine && L.source(s.chair.agent) !== "claude") {
       cwd = desk ??= fs.mkdtempSync(path.join(os.tmpdir(), "k-chat-chair-"));
       fs.writeFileSync(file = path.join(cwd, "schema.json"), JSON.stringify(schema));
     }
-    return L.structured(await agent(L.chairArgv(s.chair, schema, file), { cwd, input: L.source(s.chair.agent) === "claude" ? prompt : `${prompt}\n\n只根據上面的內容直接回答,不要使用任何工具。`, timeout: 5 * 60000, stop: stopAsked }));
+    // Hermes takes no schema of its own: it gets it in the prompt, and structured() reads the JSON from its text.
+    const src = L.source(s.chair.agent);
+    const input = src === "claude" ? prompt
+      : `${prompt}\n\n只根據上面的內容直接回答,不要使用任何工具。${src === "hermes" ? `\n只輸出一個符合這個 JSON Schema 的 JSON 物件,前後不要有其他文字:\n${JSON.stringify(schema)}` : ""}`;
+    return L.structured(await agent(L.chairArgv(s.chair, schema, file), { cwd, machine, input, timeout: 5 * 60000, stop: stopAsked }));
   };
 
   const pulse = setInterval(beat, 5000);
@@ -170,7 +178,7 @@ function host(statePath) {
             const was = L.source(s.chair.agent), to = msg.chair_agent ? L.source(msg.chair_agent) : was;
             // Another source: its own default model unless one was named.
             const model = (typeof msg.chair_model === "string" ? L.modelName(msg.chair_model) : to === was ? s.chair.model : null) ?? L.SOURCES[to].chair;
-            if (to !== was || model !== s.chair.model) { s.chair = { ...s.chair, agent: to, model }; write("chair", `🪑 主席改用 ${L.sourceLabel(s.chair)}。`); }
+            if (to !== was || model !== s.chair.model) { s.chair = L.chairOf(to, model, s.chair.machine); write("chair", `🪑 主席改用 ${L.chairLabel(s.chair)}。`); }
           } catch (e) { write("chair", `⚠️ 主席沒換成:${e.message}`); }
         }
       } else if (msg.type === "card") cards(msg.todos ?? []);
@@ -324,7 +332,7 @@ function main() {
       let name = base;
       for (let i = 2; fs.existsSync(L.files(repo, name).json) || fs.existsSync(L.files(repo, name).md); i += 1) name = `${base}-${i}`;
       const f = L.files(repo, name);
-      const s = L.newState({ repo, topic: name, title: o.title || o.topic, space: o.space, list: JSON.parse(o.members || "[]"), chairAgent: o["chair-agent"], chairModel: o["chair-model"], maxRounds: o["max-rounds"], allowYolo: !o.noYolo, direct: o.direct, act: o.act });
+      const s = L.newState({ repo, topic: name, title: o.title || o.topic, space: o.space, list: JSON.parse(o.members || "[]"), chairAgent: o["chair-agent"], chairModel: o["chair-model"], chairMachine: o["chair-machine"], maxRounds: o["max-rounds"], allowYolo: !o.noYolo, direct: o.direct, act: o.act });
       if (s.direct && !o.say) s.status = "waiting";   // nothing said yet: the agent has nothing to answer
       fs.mkdirSync(f.inbox, { recursive: true });
       fs.writeFileSync(f.md, L.header(s));

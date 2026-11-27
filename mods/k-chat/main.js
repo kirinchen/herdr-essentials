@@ -11,12 +11,57 @@
 //   herdr-app do mod.open --name k-chat      (the shown Space is the main one)
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextView, ScrollHandle } from "gpui-base";
-import { spaces, exec, readTextFile, appHome, theme, props, closeOverlay, run, notify, checking } from "herdr";
+import { spaces, agents, exec, home, readTextFile, appHome, theme, props, closeOverlay, run, notify, checking } from "herdr";
 
 const RUNNER = () => `${appHome().replace(/[\\/]+$/, "")}/tools/k-chat/runner.mjs`;
 // Where a model comes from (the same list as tools/k-chat/lib.mjs): the CLI started for it.
-const SOURCES = [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["gemini", "Gemini", "agy"]];
+const SOURCES = [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["gemini", "Gemini", "agy"], ["hermes", "Hermes", "hermes"]];
 const sourceId = (x) => x?.agent ?? "claude";
+// A space to invite, as people tell them apart: one on another machine by that machine's name (its
+// spaces are often all named after the login, e.g. "arthur"), with the space's name and folder after
+// it. The member gets that name too, so the chair calls it what the list showed.
+const who = (sp) => sp.machine ?? sp.name;
+const where = (sp) => (sp.machine ? `${sp.name} · ${sp.folder || "家目錄"}` : sp.folder);
+// Which source an agent in Herdr's Agents list is, by what it reports (app) or its program's key
+// (the names k-spaces knows, and Hermes'); null: one k-chat can't start headless.
+function sourceOfAgent(a) {
+  for (const k of [a?.app, a?.program?.key].map((x) => String(x ?? "").toLowerCase())) {
+    if (k === "claude" || k === "claude-code") return "claude";
+    if (k === "codex") return "codex";
+    if (k === "agy" || k === "antigravity" || k === "gemini") return "gemini";
+    if (k === "hermes" || k === "hermes-agent") return "hermes";
+  }
+  return null;
+}
+// The agent running in a space, as { src, name } (src null: not one k-chat knows); null: none there.
+function agentIn(sp) {
+  const here = agents().filter((a) => a.space === sp?.id);
+  if (!here.length) return null;
+  const known = here.find((a) => sourceOfAgent(a));
+  const a = known ?? here[0];
+  return { src: known ? sourceOfAgent(known) : null, name: a.program?.name || a.app || "agent" };
+}
+// Only spaces with an agent running in them (a Space with only a shell has no one to invite).
+const withAgent = () => { const live = new Set(agents().map((a) => a.space)); return spaces().filter((sp) => live.has(sp.id)); };
+// Where a discussion's record goes: the main Space's folder here; for a Space on another machine
+// (the runner and the record stay on this one), this machine's home.
+const repoOf = (m) => (m?.machine ? home() : m?.folder || home());
+// Which of the sources' CLIs a machine has, as { claude, codex, gemini, hermes }: asked through herdr-core.
+const BINS = { claude: "claude", codex: "codex", agy: "gemini", hermes: "hermes" };
+async function sourcesOn(machine) {
+  const r = await exec("sh", ["-c", `for b in ${Object.keys(BINS).join(" ")}; do command -v "$b" >/dev/null 2>&1 && echo "$b"; done; true`], { on: machine, timeout: 15000 });
+  const found = new Set(String(r.stdout ?? "").split(/\s+/).filter(Boolean));
+  return Object.fromEntries(Object.entries(BINS).map(([bin, src]) => [src, found.has(bin)]));
+}
+// A member needs a folder; a space without one starts in its machine's home: ask that machine where it is.
+async function folderOf(sp) {
+  if (sp.folder) return sp.folder;
+  if (!sp.machine) return home();
+  const r = await exec("pwd", [], { on: sp.machine, timeout: 15000 });
+  const dir = String(r.stdout ?? "").trim().split("\n").pop();
+  if (!dir?.startsWith("/")) throw new Error(`問不到 ${sp.machine} 的家目錄:${String(r.stderr ?? "").trim().slice(0, 200) || "(沒有回應)"}`);
+  return dir;
+}
 const sourceLabel = (x) => `${SOURCES.find(([id]) => id === sourceId(x))?.[1] ?? x?.agent}${x?.model ? ` ${x.model}` : ""}`;
 const base = (p) => String(p ?? "").split(/[\\/]/).filter(Boolean).pop() ?? "";
 
@@ -49,8 +94,8 @@ export default class Chat extends View {
     this.topic = InputState.new({ placeholder: "主題,例:k-chat 要不要支援 Codex(檔名取其中的英數)" });
     this.opening = InputState.new({ placeholder: "開場:要大家討論什麼?" });
     this.rounds = InputState.new({ placeholder: "12", value: "12" });
-    this.have = null;         // which sources this machine's PATH has ({ claude, codex, gemini }), null: not asked yet
-    this.src = new Map();     // new form: space id → its member's source
+    this.have = null;         // which sources this machine's PATH has ({ claude, codex, gemini, hermes }), null: not asked yet
+    this.haveOn = new Map();  // the same for another machine (the chair's): name → object, "asking" or "failed"
     this.models = new Map();  // new form: space id → its member's model field
     this.chairSrc = "claude"; this.chairModel = InputState.new({ placeholder: "模型(空白 = 預設)", value: "sonnet" });
     this.say = InputState.new({ placeholder: "說點什麼… @成員 指定下一個發言 · /stop 中止這一輪 · /end 收尾" });
@@ -89,11 +134,40 @@ export default class Chat extends View {
     });
   }
 
+  // Which sources the chair's machine has: this one's from the runner, another's asked once per window.
+  // null while not known yet.
+  haveFor(machine) {
+    if (!machine) return this.have;
+    const h = this.haveOn.get(machine);
+    return h && typeof h === "object" ? h : null;
+  }
+  askHave(machine, cx) {
+    if (!machine || this.haveOn.has(machine)) return;
+    this.haveOn.set(machine, "asking");
+    cx.spawn(async (cx) => {
+      try { this.haveOn.set(machine, await sourcesOn(machine)); this.fixChair(); }
+      catch (e) { this.haveOn.set(machine, "failed"); this.error = `問不到 ${machine} 裝了哪些 CLI:${String(e?.message ?? e).slice(0, 200)}`; }
+      cx.notify();
+    });
+  }
+  // The chair answers on the main Space's machine. Codex can't there (its schema is a file here).
+  chairCan(src, machine) {
+    const have = this.haveFor(machine);
+    return Boolean(have?.[src]) && !(machine && src === "codex");
+  }
+  // A chair source that machine can't run: the main Space's own agent if it can, else the first it has.
+  fixChair() {
+    const m = this.main(), on = m?.machine ?? null;
+    if (!this.haveFor(on) || this.chairCan(this.chairSrc, on)) return;
+    const next = [agentIn(m)?.src, "claude", "hermes", "gemini", "codex"].find((x) => x && this.chairCan(x, on));
+    if (next) { this.chairSrc = next; this.chairModel.set_value(next === "claude" ? "sonnet" : ""); }
+  }
+
   // This repo's discussions, asked of the runner (a mod can't list a folder outside its own).
   async loadTopics() {
     const m = this.main();
-    if (!m?.folder || m.machine) { this.topics = []; return; }
-    try { this.topics = JSON.parse((await this.cmd(["list", "--repo", m.folder])) || "[]"); if (this.view === "list") this.error = null; }
+    if (!m) { this.topics = []; return; }
+    try { this.topics = JSON.parse((await this.cmd(["list", "--repo", repoOf(m)])) || "[]"); if (this.view === "list") this.error = null; }
     catch (e) { this.error = String(e?.message ?? e); }
   }
 
@@ -152,6 +226,8 @@ export default class Chat extends View {
   adopt(x, cx) {
     const m = this.main();
     if (!m?.folder) return;
+    // The record would be this machine's, the agent the other one's: not for a Space elsewhere.
+    if (m.machine) { this.error = `porthole 的對話只能在這台電腦的 Space 接手(${who(m)} 在別台)。`; cx.notify(); return; }
     this.act("接手 porthole 的對話…", cx, async (cx) => {
       const path = await this.cmd(["adopt", x.md, "--space", m.name, "--members", JSON.stringify([{ name: m.name, space: m.name, cwd: m.folder, agent: "claude" }])]);
       this.go(path, x.title, cx);
@@ -161,14 +237,18 @@ export default class Chat extends View {
   create(cx) {
     const m = this.main(), topic = this.topic.value().trim(), opening = this.opening.value().trim();
     if (!m) { this.error = "沒有 Space:先開一個 Space 當主 Space。"; cx.notify(); return; }
-    if (m.machine) { this.error = `主 Space 要在這台機器上(${m.name} 在 ${m.machine});成員可以在別台。`; cx.notify(); return; }
     if (!topic || !opening) { this.error = "主題和開場都要填。"; cx.notify(); return; }
-    const list = spaces().filter((s) => this.picked.has(s.id))
-      .map((s) => ({ name: s.name, space: s.name, machine: s.machine, cwd: s.folder, agent: this.src.get(s.id) ?? "claude", model: this.models.get(s.id)?.value().trim() || null }));
-    if (!list.length) { this.error = "至少邀一個 agent。"; cx.notify(); return; }
+    // The chair answers on the main Space's machine (the record and the runner stay here).
+    const on = m.machine ?? null;
+    if (!this.haveFor(on)) { this.error = `還在問 ${on ?? "這台電腦"} 裝了哪些 CLI,等一下再按。`; cx.notify(); return; }
+    if (!this.chairCan(this.chairSrc, on)) { this.error = `主席不能用 ${sourceLabel({ agent: this.chairSrc })}:${on ?? "這台電腦"} 沒有它${on && this.chairSrc === "codex" ? "(Codex 只能在這台電腦當主席)" : ""}。`; cx.notify(); return; }
+    // Each member is the agent running in its Space (Herdr's Agents list), not a choice here.
+    const picked = spaces().filter((s) => this.picked.has(s.id) && agentIn(s)?.src);
+    if (!picked.length) { this.error = "至少邀一個 agent。"; cx.notify(); return; }
     this.act("建立討論…", cx, async (cx) => {
-      const path = await this.cmd(["new", "--repo", m.folder, "--topic", topic, "--title", topic, "--space", m.name, "--members", JSON.stringify(list), "--say", opening,
-        "--chair-agent", this.chairSrc, ...(this.chairModel.value().trim() ? ["--chair-model", this.chairModel.value().trim()] : []),
+      const list = await Promise.all(picked.map(async (s) => ({ name: who(s), space: s.name, machine: s.machine, cwd: await folderOf(s), agent: agentIn(s).src, model: this.models.get(s.id)?.value().trim() || null })));
+      const path = await this.cmd(["new", "--repo", repoOf(m), "--topic", topic, "--title", topic, "--space", m.name, "--members", JSON.stringify(list), "--say", opening,
+        "--chair-agent", this.chairSrc, ...(this.chairModel.value().trim() ? ["--chair-model", this.chairModel.value().trim()] : []), ...(on ? ["--chair-machine", on] : []),
         "--max-rounds", String(Number(this.rounds.value()) > 0 ? Number(this.rounds.value()) : 12), ...(this.yolo ? [] : ["--no-yolo"])]);
       this.topic.set_value(""); this.opening.set_value("");
       this.statePath = path;
@@ -205,15 +285,24 @@ export default class Chat extends View {
       .child(div().flex_1().min_w(0).truncate().text_right().text_size(11).text_color(t.dim).child(hint ?? ""));
 
     // Claude | Codex | Gemini: one is on, or (value null) each is a button. Dimmed: this machine's
-    // PATH doesn't have that CLI (a member on another machine uses the one there, unknown from here).
+    // machine (null: this one) can't run it, and can't be picked; all dimmed while that isn't known yet.
     const chips = (id, value, machine, pick) => h_flex().flex_none().gap(4).children(SOURCES.map(([src, label, bin]) => {
-      const missing = !machine && this.have && !this.have[src], on = value === src;
-      return h_flex().id(`${id}-${src}`).h(22).px(8).items_center().rounded(6).flex_none().border_1().text_size(11).cursor_pointer()
-        .border_color(on ? t.accent : t.input).bg(t.raised).text_color(on ? t.accent : t.muted).when(Boolean(missing), (el) => el.opacity(0.45))
-        .hover((st) => st.opacity(0.85))
-        .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click((_e, cx) => pick(src, cx))
-        .tooltip(missing ? `這台的 PATH 找不到 ${bin}` : `${label}(${bin})`).child(label);
+      const known = Boolean(this.haveFor(machine)), can = this.chairCan(src, machine), on = value === src;
+      const where = machine ?? "這台電腦";
+      const tip = !known ? `還在問 ${where} 裝了哪些 CLI…` : can ? `${label}(${bin},在 ${where})`
+        : machine && src === "codex" ? "Codex 只能在這台電腦當主席" : `${where} 的 PATH 找不到 ${bin}`;
+      return h_flex().id(`${id}-${src}`).h(22).px(8).items_center().rounded(6).flex_none().border_1().text_size(11)
+        .border_color(on ? t.accent : t.input).bg(t.raised).text_color(on ? t.accent : t.muted).when(!can, (el) => el.opacity(0.45))
+        .when(can, (el) => el.cursor_pointer().hover((st) => st.opacity(0.85))
+          .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click((_e, cx) => pick(src, cx)))
+        .tooltip(tip).child(label);
     }));
+    // A member's source: the agent running in its Space (Herdr's Agents list).
+    const agentTag = (sp) => {
+      const a = agentIn(sp);
+      return div().flex_none().w(64).text_size(11).text_color(a?.src ? t.accent : t.dim)
+        .child(a?.src ? sourceLabel({ agent: a.src }) : `${a?.name ?? "?"}(不支援)`);
+    };
 
     const top = (title, ...right) => h_flex().h(44).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
       .when(this.view !== "list", (el) => el.child(div().id("k-chat-back").w(20).cursor_pointer().text_color(t.muted)
@@ -230,10 +319,10 @@ export default class Chat extends View {
 
     if (this.view === "list") {
       return shell(
-        top(`Discussions · ${m?.name ?? "(no space)"}`, button("k-chat-new", "New discussion", (_e, cx) => { this.view = "new"; this.picked = new Set(); this.error = null; cx.notify(); }, { primary: true })),
+        top(`Discussions · ${m?.name ?? "(no space)"}`, button("k-chat-new", "New discussion", (_e, cx) => { this.view = "new"; this.picked = new Set(); this.error = null; this.askHave(m?.machine, cx); this.fixChair(); cx.notify(); }, { primary: true })),
         v_flex().id("k-chat-topics").flex_1().min_h(0).overflow_y_scrollbar().p(8).gap(2)
           .when(!this.topics.length, (el) => el.child(div().p(10).text_size(12).text_color(t.dim)
-            .child(m ? `${m.name} 的 doc/chat/ 還沒有討論。按 New discussion 開一場:邀幾個 Space 的 agent 進來、主席輪流點名。只跟這個 Space 的 agent 一對一對話:側欄 Space 列的「+」→ Chat。` : "先開一個 Space。")))
+            .child(m ? `${repoOf(m)}/doc/chat/ 還沒有討論。按 New discussion 開一場:邀幾個 Space 的 agent 進來、主席輪流點名。只跟這個 Space 的 agent 一對一對話:側欄 Space 列的「+」→ Chat。` : "先開一個 Space。")))
           .children(this.topics.map((x, i) => h_flex().id(`k-chat-topic-${i}`).min_h(40).px(10).gap(10).items_center().rounded(7).cursor_pointer().hover((st) => st.bg(t.hover))
             .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click((_e, cx) => (x.porthole ? this.adopt(x, cx) : this.go(x.path, x.title, cx)))
             .when(Boolean(x.porthole), (el) => el.tooltip("在 porthole 開的對話:點開就接著跟這個 Space 的 agent 聊(同一個檔)"))
@@ -246,11 +335,11 @@ export default class Chat extends View {
     }
 
     if (this.view === "new") {
-      const all = spaces();
+      const all = withAgent();
       return shell(
         top("New discussion", button("k-chat-create", "Start", (_e, cx) => this.create(cx), { primary: true, off: Boolean(this.busy) })),
         v_flex().id("k-chat-form").flex_1().min_h(0).overflow_y_scrollbar().p(14).gap(10)
-          .child(div().text_size(11.5).text_color(t.dim).child(`主 Space:${m?.name ?? "?"} · 紀錄存到 ${m?.folder ?? "?"}/doc/chat/`))
+          .child(div().text_size(11.5).text_color(t.dim).child(m ? `主 Space:${who(m)}${m.machine ? `(${m.name})` : ""} · 紀錄存到 ${repoOf(m)}/doc/chat/(這台電腦)` : "主 Space:?"))
           .child(field(this.topic))
           .child(field(this.opening))
           .child(h_flex().gap(10).items_center()
@@ -259,21 +348,21 @@ export default class Chat extends View {
             .child(button("k-chat-yolo-new", this.yolo ? "允許主席開 YOLO:開" : "允許主席開 YOLO:關", (_e, cx) => { this.yolo = !this.yolo; cx.notify(); },
               { on: this.yolo, tip: "開:主席可以讓某個成員某一輪動手改檔(紀錄裡會有 🔓 一行),那輪結束就收回" })))
           .child(h_flex().gap(10).items_center()
-            .child(div().text_size(12).text_color(t.muted).child("主席"))
-            .child(chips("k-chat-chair", this.chairSrc, null, (src, cx) => { this.chairSrc = src; this.chairModel.set_value(src === "claude" ? "sonnet" : ""); cx.notify(); }))
+            .child(div().text_size(12).text_color(t.muted).child(`主席 · 在 ${m?.machine ?? "這台電腦"}`))
+            .child(chips("k-chat-chair", this.chairSrc, m?.machine ?? null, (src, cx) => { this.chairSrc = src; this.chairModel.set_value(src === "claude" ? "sonnet" : ""); cx.notify(); }))
             .child(field(this.chairModel).w(190)))
-          .child(div().pt(6).text_size(11).font_semibold().text_color(t.muted).child(`邀請(${this.picked.size})· 每位可以選模型來源`))
+          .child(div().pt(6).text_size(11).font_semibold().text_color(t.muted).child(`邀請(${this.picked.size})· 每位就是那個 Space 正在跑的 agent`))
+          .when(!all.length, (el) => el.child(div().px(8).text_size(12).text_color(t.dim).child("沒有開著 agent 的 Space:先在要邀的 Space 開一個 agent。")))
           .children(all.map((sp, i) => {
-            const on = this.picked.has(sp.id);
+            const on = this.picked.has(sp.id), ok = Boolean(agentIn(sp)?.src);
             return h_flex().gap(8).items_center()
-              .child(tick(`k-chat-pick-${i}`, on, sp.name, `${sp.machine ? `${sp.machine} · ` : ""}${sp.folder}`, (_e, cx) => {
+              .child(tick(`k-chat-pick-${i}`, on, who(sp), where(sp), (_e, cx) => {
                 if (on) this.picked.delete(sp.id);
-                else { this.picked.add(sp.id); if (!this.models.has(sp.id)) this.models.set(sp.id, InputState.new({ placeholder: "模型(空白 = 預設)" })); }
+                else if (ok) { this.picked.add(sp.id); if (!this.models.has(sp.id)) this.models.set(sp.id, InputState.new({ placeholder: "模型(空白 = 預設)" })); }
                 cx.notify();
-              }).flex_1().min_w(0))
-              .when(on, (el) => el
-                .child(chips(`k-chat-src-${i}`, this.src.get(sp.id) ?? "claude", sp.machine, (src, cx) => { this.src.set(sp.id, src); this.models.get(sp.id)?.set_value(""); cx.notify(); }))
-                .child(field(this.models.get(sp.id)).w(150).flex_none()));
+              }).flex_1().min_w(0).when(!ok, (el) => el.opacity(0.45)))
+              .child(agentTag(sp))
+              .when(on, (el) => el.child(field(this.models.get(sp.id)).w(150).flex_none()));
           })),
         note());
     }
@@ -292,7 +381,11 @@ export default class Chat extends View {
               : s.status === "done" ? "已結束(再發言會重新開始)" : s.status === "waiting" ? "等 Owner 發言" : "…";
     const active = hosted && ["member", "chair", "conclude"].includes(now.phase);
     const todos = s?.todos ?? [], open = todos.map((x, i) => [x, i]).filter(([x]) => !x.card);
-    const others = spaces().filter((sp) => !(s?.members ?? []).some((x) => x.cwd === sp.folder && (x.machine ?? null) === (sp.machine ?? null)));
+    // Already in: a member on its machine in its folder. A space without a folder got its machine's home
+    // (asked when it was invited, not known here), so there it's the member named after the space.
+    const inIt = (sp, x) => (x.machine ?? null) === (sp.machine ?? null)
+      && (sp.folder ? x.cwd === sp.folder : sp.machine ? x.name === who(sp) : x.cwd === home());
+    const others = withAgent().filter((sp) => !(s?.members ?? []).some((x) => inIt(sp, x)));
 
     return shell(
       top(s?.title ?? "…",
@@ -302,7 +395,7 @@ export default class Chat extends View {
             { on: Boolean(s.act), tip: "只能讀:讀檔、搜尋、查網頁。可動手:它可以改檔、跑指令(不問權限),到你關掉為止" })
           : button("k-chat-yolo", s?.allow_yolo ? "YOLO 可開" : "YOLO 關", (_e, cx) => this.act("設定…", cx, () => this.cmd(["set", this.statePath, `allow_yolo=${!s?.allow_yolo}`])),
             { on: Boolean(s?.allow_yolo), off: !s, tip: "允許主席讓某個成員某一輪動手改檔" }),
-        button("k-chat-invite", "Invite", (_e, cx) => { this.inviting = !this.inviting; cx.notify(); }, { on: this.inviting, off: !s, tip: s?.direct ? "再邀一個 agent 進來:就變成討論群,由主席點名" : "邀請別的 Space 的 agent、換主席" }),
+        button("k-chat-invite", "Invite", (_e, cx) => { this.inviting = !this.inviting; this.askHave(s?.chair?.machine, cx); cx.notify(); }, { on: this.inviting, off: !s, tip: s?.direct ? "再邀一個 agent 進來:就變成討論群,由主席點名" : "邀請別的 Space 的 agent、換主席" }),
         button("k-chat-stop", "Stop", (_e, cx) => this.send("/stop", cx), { off: !active, tip: "中止現在這一輪(/stop)" }),
         button("k-chat-end", "Wrap up", (_e, cx) => this.send("/end", cx), { off: !s || s.status === "done", tip: "請主席現在寫結論(/end)" })),
       h_flex().h(28).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).text_size(11.5)
@@ -313,16 +406,19 @@ export default class Chat extends View {
         .when(Boolean(s) && hosted && !active, (el) => el.child(button("k-chat-quit", "Stop host", (_e, cx) => this.act("關閉主持程式…", cx, () => this.cmd(["quit", this.statePath])), { tip: "讓背景的主持程式離開;紀錄留著,之後發言或按 Resume 會再起來" }))),
       this.inviting ? v_flex().flex_none().max_h(240).overflow_y_scrollbar().p(8).gap(2).border_b(1).border_color(t.border)
         .child(h_flex().min_h(30).px(8).gap(9).items_center()
-          .child(div().flex_1().min_w(0).truncate().child(`主席 · 現在是 ${sourceLabel(s?.chair)}`))
-          .child(chips("k-chat-chair-set", sourceId(s?.chair), null, (src, cx) => this.act("換主席…", cx, () => this.cmd(["set", this.statePath, `chair_agent=${src}`])))))
-        .when(!others.length, (el) => el.child(div().p(6).text_size(12).text_color(t.dim).child("所有 Space 都已經在討論裡。")))
+          .child(div().flex_1().min_w(0).truncate().child(`主席 · 現在是 ${sourceLabel(s?.chair)} · 在 ${s?.chair?.machine ?? "這台電腦"}`))
+          .child(chips("k-chat-chair-set", sourceId(s?.chair), s?.chair?.machine ?? null, (src, cx) => this.act("換主席…", cx, () => this.cmd(["set", this.statePath, `chair_agent=${src}`])))))
+        .when(!others.length, (el) => el.child(div().p(6).text_size(12).text_color(t.dim).child("有 agent 的 Space 都已經在討論裡。")))
         .children(others.map((sp, i) => h_flex().min_h(30).px(8).gap(9).items_center()
-          .child(div().flex_none().child(sp.name))
-          .child(div().flex_1().min_w(0).truncate().text_right().text_size(11).text_color(t.dim).child(`${sp.machine ? `${sp.machine} · ` : ""}${sp.folder}`))
-          .child(chips(`k-chat-inv-${i}`, null, sp.machine, (src, cx) => {
+          .child(div().flex_none().child(who(sp)))
+          .child(div().flex_1().min_w(0).truncate().text_right().text_size(11).text_color(t.dim).child(where(sp)))
+          .child(agentTag(sp))
+          .child(button(`k-chat-inv-${i}`, "邀請", (_e, cx) => {
+            const src = agentIn(sp)?.src;
+            if (!src) return;
             this.inviting = false;
-            this.act("邀請…", cx, () => this.cmd(["invite", this.statePath, JSON.stringify({ name: sp.name, space: sp.name, machine: sp.machine, cwd: sp.folder, agent: src })]));
-          })))) : div(),
+            this.act("邀請…", cx, async () => this.cmd(["invite", this.statePath, JSON.stringify({ name: who(sp), space: sp.name, machine: sp.machine, cwd: await folderOf(sp), agent: src })]));
+          }, { off: !agentIn(sp)?.src })))) : div(),
       v_flex().id("k-chat-record").flex_1().min_h(0).overflow_y_scrollbar().track_scroll(this.scroll).p(12).gap(10)
         .children(this.msgs.map((x, i) => v_flex().flex_none().gap(3).px(11).py(8).rounded(9)
           .bg(x.role === "owner" ? `${t.accent}1f` : x.role === "chair" ? `${t.background}00` : t.raised ?? t.hover)

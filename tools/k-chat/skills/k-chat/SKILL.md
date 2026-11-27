@@ -27,7 +27,7 @@ node ${CLAUDE_PLUGIN_ROOT}/runner.mjs <指令> …
 
 | 指令 | 做什麼 |
 |---|---|
-| `new --repo <主 repo> --topic <主題> --members '<JSON>' --say '<開場>' [--max-rounds 12] [--chair-agent claude] [--chair-model sonnet] [--no-yolo]` | 建檔,印出 `<主題>.json` 的路徑。還不會開始跑 |
+| `new --repo <主 repo> --topic <主題> --members '<JSON>' --say '<開場>' [--max-rounds 12] [--chair-agent claude] [--chair-model sonnet] [--chair-machine <機器>] [--no-yolo]` | 建檔,印出 `<主題>.json` 的路徑。還不會開始跑 |
 | `start <state.json>` | 在 herdr-core 開一個自己的 terminal 來主持(`hc run --keep`,不佔側欄),並在 Herdr App 的排版加一個對話 tab「💬 主題」。關掉你這個 session、關掉 App 視窗都照跑 |
 | `run <state.json>` | 就在目前這個 terminal 主持(前景,會一直跑)。沒有 herdr-core 時用 |
 | `list --repo <主 repo>` | 這個 repo 的討論(JSON) |

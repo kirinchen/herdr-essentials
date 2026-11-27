@@ -8,8 +8,9 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { panes, terminals, spaces, props, run, theme, home, layout, shared } from "herdr";
-import { chipsFor, modsIn, placeOf } from "./core.js";
+import { panes, terminals, spaces, props, run, theme, home, layout, shared, openOverlay } from "herdr";
+import { chipsFor, modsIn, placeOf, switchKind } from "./core.js";
+import ModelMenu from "./switch.js";
 import { modelOf, effortLevel, modelTip } from "./model.js";
 
 // Match the first visible tab frame, including the active child of a stack.
@@ -50,7 +51,11 @@ function folder(cwd) {
 }
 
 export default class Pane extends View {
-  init() { this.hovered = false; }
+  init(_p, cx) {
+    this.hovered = false;
+    // The model menu is a popup copy of this mod (switch.js).
+    if (props()?.kModel) this.menuView = cx.new(ModelMenu, {});
+  }
 
   me() {
     return panes().find((p) => p.pane === props()?.pane);
@@ -95,6 +100,7 @@ export default class Pane extends View {
   }
 
   render(cx) {
+    if (this.menuView) return this.menuView;
     const t = theme();
     const p = this.me();
     if (!p) return div();
@@ -103,7 +109,17 @@ export default class Pane extends View {
     const m = modelOf(terminals().find((x) => x.address === p.terminal), "mods/k-pane");
     const known = Boolean(m?.icon);
     const name = p.name || (known ? "" : ((p.program?.agent || p.program?.shell) && p.program.name) || p.title || p.program?.name || "shell");
-    const pic = known ? modelIcon(m) : icon(p.program, 14, t.dim);
+    const kind = switchKind(p.program);
+    let pic = known ? modelIcon(m) : icon(p.program, 14, t.dim);
+    // Claude Code / Codex: the icon opens the model menu (switch.js).
+    if (pic && kind) pic = div().id(`pane-model-${p.pane}`).flex_none().rounded(6).cursor_pointer()
+      .hover((s) => s.bg(t.hover))
+      .on_click((_e, cx) => {
+        cx.stop_propagation();
+        openOverlay({ mod: "k-pane", kind: "popup", width: 210, height: kind === "claude" ? 284 : 40,
+          props: { kModel: { terminal: p.terminal, kind, model: m?.kind ?? null, effort: m?.effort ?? null } } });
+      })
+      .child(pic);
     const at = placeOf(spaces(), p.tab);
     const tip = [known ? [p.program?.name, modelTip(m)].filter(Boolean).join(" \u00b7 ") : "", folder(p.cwd)].filter(Boolean).join("\n");
     const st = p.status;
@@ -124,9 +140,11 @@ export default class Pane extends View {
       .text_size(12)
       .on_hover((hovered, cx) => { this.hovered = hovered; cx.notify(); })
       .on_click(() => run("pane.focus", { pane }))
+      // The model menu's icon is outside the tooltip: the tooltip would cover the menu.
+      .when(Boolean(pic) && Boolean(kind), (el) => el.child(pic))
       .child(h_flex().id(`pane-who-${pane}`).flex_none().gap(8).items_center()
         .when(Boolean(tip), el => el.tooltip(tip))
-        .when(Boolean(pic), (el) => el.child(pic))
+        .when(Boolean(pic) && !kind, (el) => el.child(pic))
         .when(Boolean(at.machine), el => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(at.machine)))
         .when(Boolean(at.space), el => el.child(div().flex_none().truncate().max_w(200).font_medium().text_color(t.foreground).child(at.space)))
         .when(Boolean(name) && name !== at.space, el => el.child(div().flex_none().truncate().max_w(260).text_color(at.space ? t.muted : t.foreground).when(!at.space, x => x.font_medium()).child(name))))

@@ -47,3 +47,23 @@ test("placeOf: the machine and the space of a pane's tab", () => {
   assert.deepEqual(placeOf(spaces, "gone"), { machine: null, space: "" });
   assert.deepEqual(placeOf(null, "tb1"), { machine: null, space: "" });
 });
+
+import { switchKind, switchItems, targetOf } from "../mods/k-pane/core.js";
+
+test("model menu: Claude Code gets models and efforts, Codex its own picker, others nothing", () => {
+  assert.equal(switchKind({ name: "Claude Code" }), "claude");
+  assert.equal(switchKind({ name: "Codex" }), "codex");
+  assert.equal(switchKind({ name: "agy" }), null);
+  const c = switchItems("claude", { kind: "opus", effort: "high" });
+  assert.deepEqual(c.map((i) => i.send), ["/model fable", "/model opus", "/model sonnet", "/model haiku",
+    "/effort low", "/effort medium", "/effort high", "/effort xhigh", "/effort max"]);
+  assert.deepEqual(c.filter((i) => i.now).map((i) => i.send), ["/model opus", "/effort high"]);
+  assert.equal(c.find((i) => i.rule).send, "/effort low");
+  assert.deepEqual(switchItems("codex", null).map((i) => i.send), ["/model"]);
+  assert.deepEqual(switchItems(null, null), []);
+});
+
+test("targetOf: machine prefix becomes exec's `on`", () => {
+  assert.deepEqual(targetOf("laptop/t10"), { on: "laptop", id: "t10" });
+  assert.deepEqual(targetOf("t6n"), { on: null, id: "t6n" });
+});

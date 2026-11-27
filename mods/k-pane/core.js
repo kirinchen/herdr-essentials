@@ -46,3 +46,33 @@ export function chipsFor(given, address, mods) {
   }
   return out;
 }
+
+// The model menu (click the model icon): what to type into the agent. Claude Code takes
+// `/model <alias>` and `/effort <level>`; Codex's `/model` opens its own picker (model and
+// reasoning effort), so it gets one entry. Other programs: no menu (null).
+export const CLAUDE_MODELS = ["fable", "opus", "sonnet", "haiku"];
+export const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+
+export function switchKind(program) {
+  const n = String(program?.name ?? "");
+  return /claude/i.test(n) ? "claude" : /codex/i.test(n) ? "codex" : null;
+}
+
+const cap = (s) => s[0].toUpperCase() + s.slice(1);
+
+// m: modelOf's answer (kind = "opus" …, effort), or null. An item: { label, send, now?, rule? }.
+export function switchItems(kind, m) {
+  if (kind === "claude") return [
+    ...CLAUDE_MODELS.map((a) => ({ label: cap(a), send: `/model ${a}`, now: m?.kind === a })),
+    ...EFFORTS.map((e, i) => ({ label: `Effort: ${e}`, send: `/effort ${e}`, now: m?.effort === e, rule: i === 0 })),
+  ];
+  if (kind === "codex") return [{ label: "Model & effort…", send: "/model", hint: "Codex's own picker" }];
+  return [];
+}
+
+// "laptop/t10" → { on: "laptop", id: "t10" }; "t6n" → { on: null, id: "t6n" }.
+export function targetOf(address) {
+  const a = String(address ?? "");
+  const i = a.indexOf("/");
+  return i < 0 ? { on: null, id: a } : { on: a.slice(0, i), id: a.slice(i + 1) };
+}

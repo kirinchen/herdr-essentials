@@ -1,4 +1,4 @@
-// k-tabs attach (herdr-essentials): pick files with the system dialog and paste their paths
+// k-attach (herdr-essentials): pick files with the system dialog and paste their paths
 // into the focused terminal, without Enter, the way dropping files does. Claude Code turns a
 // pasted image path into an image attachment.
 import { exec, hc, run, focused, spaces, notify, window } from "herdr";

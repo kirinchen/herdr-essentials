@@ -1,4 +1,4 @@
-// k-tabs paste shot (herdr-essentials): when the clipboard holds an image, a button saves it
+// k-attach paste shot (herdr-essentials): when the clipboard holds an image, a button saves it
 // as a PNG and pastes that file's path into the focused terminal, the way Attach does (Claude
 // Code turns it into an image). Herdr's own Ctrl+V on Windows only pastes text.
 import { exec, notify, window, shared, setShared } from "herdr";

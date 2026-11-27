@@ -91,6 +91,23 @@ if ! grep -q '"k-status"' "$K"; then
   sed -i.bak -E 's/"mod": *"workspace-status"/"mod": "k-status"/g' "$K" && rm -f "$K.bak"
   grep -q '"k-status"' "$K" && echo "layout: k-main 的狀態列換成 k-status(Attach / Files / Changes 在下方)" || echo "layout: 狀態列不是內建的 workspace-status,沒換成 k-status(Attach / Files / Changes 按鈕不會出現)" >&2
 fi
+# k-attach(Attach / Paste shot,原本在 k-status 裡、程式在 k-tabs):狀態列切成兩塊,右邊放 k-attach。要 node 改 JSON。重跑不會重複換。
+if ! grep -q '"k-attach"' "$K"; then
+  if command -v node >/dev/null && K="$K" node -e '
+    const fs = require("fs"), f = process.env.K, l = JSON.parse(fs.readFileSync(f, "utf8"));
+    let done = false;
+    (function walk(n) {
+      (n.children ?? []).forEach((c, i) => {
+        if (!done && c.type === "block" && c.content?.mod === "k-status") {
+          n.children[i] = { id: "status-row", type: "row", size: c.size, children: [{ ...c, size: { weight: 1 } }, { id: "attach", type: "block", content: { mod: "k-attach" }, size: { px: 190 } }] };
+          done = true;
+        } else walk(c);
+      });
+    })(l);
+    if (!done) process.exit(1);
+    fs.writeFileSync(f, JSON.stringify(l, null, 2) + "\n");'; then echo "layout: k-main 的狀態列右邊放 k-attach(Attach / Paste shot)"
+  else echo "layout: 沒找到 k-status 或沒有 node,k-attach 沒放進 k-main(Attach / Paste shot 不會出現)" >&2; fi
+fi
 # k-pick 的快捷鍵 ctrl-f12(對話框開著時只能用快捷鍵開,點標題列的準心會先關掉對話框)。已綁別的就不動。
 KJ=$H/keys.json
 if [ -e "$KJ" ]; then
@@ -114,6 +131,8 @@ navkey() { # <鍵> <指令> [可以換掉的預設]
     sed -i.bak -E "s/(\"global\": *\{)/\\1\n    \"$1\": \"$2\",/" "$KJ" && rm -f "$KJ.bak"; echo "keys: $1 → $2"
   else echo "keys: keys.json 的 global 格式認不得,自己加 \"$1\": \"$2\"" >&2; fi
 }
+# Attach / Paste shot 的指令從 k-tabs 搬到 k-attach:綁過的快捷鍵跟著換名。
+[ -e "$KJ" ] && grep -q '"k-tabs\.\(attach\|paste-shot\)"' "$KJ" && sed -i.bak -E 's/"k-tabs\.(attach|paste-shot)"/"k-attach.\1"/g' "$KJ" && rm -f "$KJ.bak" && echo "keys: k-tabs.attach / paste-shot 改成 k-attach.*"
 navkey alt-left k-chrome.back pane.go:left
 navkey alt-right k-chrome.forward pane.go:right
 navkey ctrl-q k-chrome.last-input

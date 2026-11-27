@@ -9,6 +9,7 @@ import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { run, props, closeOverlay, openOverlay, theme, keys, notify, shared, setShared } from "herdr";
 import { openAgentsInfo, openProjectInfo } from "./inspect.js";
+import { check, there } from "./has.js";
 
 export const HIDDEN = "k-spaces.hidden";
 // { machines: ["" (this computer) | name], spaces: [id] }
@@ -51,7 +52,7 @@ function items(p) {
         ...(tg.path ? [{ label: "Copy path", icon: "mods/k-spaces/copy.svg", hint: tg.path, act: (cx) => copy(cx, tg.path, "path"), rule: !tg.name }] : []),
         { label: "MCP & Skills", icon: "mods/k-spaces/plug.svg", hint: "this folder", act: () => openProjectInfo(openOverlay, tg), rule: true },
         // k-chat: a discussion among agents, kept in this Space's doc/chat/ (this Space is the main one).
-        { label: "Discussion", icon: "mods/k-spaces/bot.svg", hint: "k-chat", act: () => openOverlay({ mod: "k-chat", kind: "window", key: "k-chat", width: 780, height: 0.86, props: { space: tg.id } }) },
+        ...(there("k-chat") ? [{ label: "Discussion", icon: "mods/k-spaces/bot.svg", hint: "k-chat", act: () => openOverlay({ mod: "k-chat", kind: "window", key: "k-chat", width: 780, height: 0.86, props: { space: tg.id } }) }] : []),
         tg.hidden
           ? { label: "Unhide space", icon: "mods/k-spaces/eye.svg", act: () => setHidden("spaces", tg.id, false) }
           : { label: "Hide space", icon: "mods/k-spaces/eye-off.svg", hint: "this window", act: () => setHidden("spaces", tg.id, true) },
@@ -71,6 +72,7 @@ const shortcut = (name) => (name ? keys().find((b) => b.section === "global" && 
 
 export default class KMenu extends View {
   init(_p, cx) {
+    cx.spawn(async (cx) => { await check(["k-chat"]); cx.notify(); });
     this.at = 0;
     this.handle = cx.focus_handle();
     cx.timer.after(20, () => this.handle.focus());

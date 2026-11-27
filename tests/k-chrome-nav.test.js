@@ -1,7 +1,7 @@
 // node --test tests/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Nav, entryOf, MAX, SETTLE_MS } from "../mods/k-chrome/nav.js";
+import { Nav, entryOf, MAX, SETTLE_MS } from "../vscode-layout/mods/k-chrome/nav.js";
 
 const at = (tab, pane, terminal = `t-${pane}`) => entryOf({ space: "s", tab, pane, terminal, shown: null });
 const A = at("tb1", "p1"), B = at("tb2", "p2"), C = at("tb3", "p3"), D = at("tb4", "p4");

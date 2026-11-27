@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { projectDir, parse, parseJson, ago, isClaude, kindOf, resumeArgs, POSIX, list } from "../mods/k-spaces/sessions.js";
+import { projectDir, parse, parseJson, ago, isClaude, kindOf, resumeArgs, POSIX, list } from "../vscode-layout/mods/k-spaces/sessions.js";
 
 test("projectDir: every other character becomes a dash", () => {
   assert.equal(projectDir("/home/k/my.repo_x/"), "-home-k-my-repo-x");

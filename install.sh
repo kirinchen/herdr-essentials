@@ -13,12 +13,15 @@ MODE=link; [ "${1:-}" = "--copy" ] && MODE=copy
 # 改成要嘛建真的 symlink、要嘛失敗,再先試一次:不行就自動改用複製模式。
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) export MSYS="${MSYS:+$MSYS }winsymlinks:nativestrict" CYGWIN="${CYGWIN:+$CYGWIN }winsymlinks:nativestrict";; esac
 if [ "$MODE" = link ]; then
-  t=$(mktemp -d); if ! { ln -s "$HERE/mods" "$t/probe" 2>/dev/null && [ -L "$t/probe" ]; }; then
+  t=$(mktemp -d); if ! { ln -s "$HERE/install.sh" "$t/probe" 2>/dev/null && [ -L "$t/probe" ]; }; then
     MODE=copy; echo "這台不能建 symlink(Windows 要開「開發人員模式」),改用複製模式:之後 repo 有改動要重跑 ./install.sh" >&2
   fi; rm -rf "$t"
 fi
-for m in "$HERE"/mods/*/; do
+# mod 分包放(gallery 的格式):<包>/mods/<mod>/。版面包裡的 k-attach 是 k-attach 包的複本,用 k-attach 包那份(字母順序先到)。
+seen=" "
+for m in "$HERE"/*/mods/*/; do
   name=$(basename "$m"); src=${m%/}; dst=$H/mods/$name
+  case "$seen" in *" $name "*) continue;; esac; seen="$seen$name "
   if [ -L "$dst" ] || [ -d "$dst" ]; then rm -rf "$dst"; fi    # 不管之前是 copy 還是 link,都重做
   if [ "$MODE" = link ]; then ln -s "$src" "$dst"; echo "mod: $name -> $src"
   else mkdir -p "$dst"; cp -r "$src/." "$dst/"; echo "mod: $name (copy)"; fi
@@ -26,8 +29,8 @@ done
 # k-chat 的主持程式(tools/k-chat/runner.mjs):mod 從 App home 的 tools/k-chat 找它。跟 mod 一樣 link 或複製。
 mkdir -p "$H/tools"; dst=$H/tools/k-chat
 if [ -L "$dst" ] || [ -d "$dst" ]; then rm -rf "$dst"; fi
-if [ "$MODE" = link ]; then ln -s "$HERE/tools/k-chat" "$dst"; echo "tool: k-chat -> $HERE/tools/k-chat"
-else mkdir -p "$dst"; cp -r "$HERE/tools/k-chat/." "$dst/"; echo "tool: k-chat (copy)"; fi
+if [ "$MODE" = link ]; then ln -s "$HERE/k-chat/tools/k-chat" "$dst"; echo "tool: k-chat -> $HERE/k-chat/tools/k-chat"
+else mkdir -p "$dst"; cp -r "$HERE/k-chat/tools/k-chat/." "$dst/"; echo "tool: k-chat (copy)"; fi
 command -v node >/dev/null || echo "tool: 找不到 node(k-chat 的主持程式要 Node 18+)" >&2
 # k-float 的輔助程式(tools/k-float,Rust):這台自己建一支,float.js 從 App home 的 tools/k-float/target/release 找它。
 # link 模式整個資料夾 link 過去;複製模式只放執行檔(target/ 很大)。沒有 cargo 就跳過,k-float / k-note 會說找不到輔助程式。
@@ -38,10 +41,10 @@ FD=$H/data/k-float
 if [ -x "$dst/target/release/$EXE" ]; then mkdir -p "$FD" && touch "$FD/paused"; "$dst/target/release/$EXE" stop "$FD" 2>/dev/null && sleep 1; fi
 trap 'rm -f "$FD/paused"' EXIT
 if command -v cargo >/dev/null; then
-  if (cd "$HERE/tools/k-float" && cargo build --release --quiet); then
+  if (cd "$HERE/k-float/tools/k-float" && cargo build --release --quiet); then
     if [ -L "$dst" ] || [ -d "$dst" ]; then rm -rf "$dst"; fi
-    if [ "$MODE" = link ]; then ln -s "$HERE/tools/k-float" "$dst"; echo "tool: k-float -> $HERE/tools/k-float"
-    else mkdir -p "$dst/target/release"; cp "$HERE/tools/k-float/target/release/$EXE" "$dst/target/release/"; echo "tool: k-float (copy)"; fi
+    if [ "$MODE" = link ]; then ln -s "$HERE/k-float/tools/k-float" "$dst"; echo "tool: k-float -> $HERE/k-float/tools/k-float"
+    else mkdir -p "$dst/target/release"; cp "$HERE/k-float/tools/k-float/target/release/$EXE" "$dst/target/release/"; echo "tool: k-float (copy)"; fi
   else echo "tool: k-float 建置失敗(Linux 要 libwebkit2gtk-4.1-dev、libgtk-3-dev),k-float / k-note 先不能用" >&2; fi
 else echo "tool: 找不到 cargo,k-float 的輔助程式沒建(k-float / k-note 先不能用);裝 Rust 後重跑" >&2; fi
 rm -f "$FD/paused"
@@ -141,7 +144,7 @@ navkey ctrl-q k-chrome.last-input
 navkey ctrl-shift-t mod.open:picker tab.new
 # Claude Code 的 statusLine 回報器:把模型、強度寫成 terminal 標籤,k-agents 的 Agents 列換 icon / 底色。
 # 只在 ~/.claude/settings.json 還沒有 statusLine 時加;已有別的就不動,只提醒。要 node 改 JSON。
-SL="$HERE/tools/statusline/herdr-statusline.sh"
+SL="$HERE/vscode-layout/tools/statusline/herdr-statusline.sh"
 command -v cygpath >/dev/null && SL=$(cygpath -m "$SL")
 CS="$HOME/.claude/settings.json"
 if ! command -v node >/dev/null; then echo "statusline: 沒有 node,沒加 Claude Code statusLine(Agents 列不會顯示模型 / 強度)" >&2
@@ -154,4 +157,4 @@ else
     else if (s.statusLine) console.error("statusline: Claude Code 已有別的 statusLine,沒換;要顯示模型 / 強度,在它裡面呼叫 " + cmd + "(把 stdin 轉給它)");
     else { fs.mkdirSync(require("path").dirname(f), { recursive: true }); s.statusLine = { type: "command", command: cmd }; fs.writeFileSync(f, JSON.stringify(s, null, 2) + "\n"); console.log("statusline: Claude Code 加上 herdr-statusline(Agents 列顯示模型 / 強度,新開的 session 生效)"); }'
 fi
-command -v herdr-app >/dev/null && for m in "$HERE"/mods/*/; do herdr-app check "$H/mods/$(basename "$m")" 2>&1 | grep -v libEGL; done
+command -v herdr-app >/dev/null && for m in $(printf "%s\n" "$HERE"/*/mods/*/ | xargs -n1 basename | sort -u); do herdr-app check "$H/mods/$m" 2>&1 | grep -v libEGL; done

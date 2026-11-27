@@ -4,7 +4,7 @@
   "plugins": [
     {
       "name": "k-chat",
-      "source": "./tools/k-chat",
+      "source": "./k-chat/tools/k-chat",
       "version": "0.1.0",
       "description": "多 agent 討論群(主席制):開討論、邀 agent、替 Owner 發言;主席決定誰發言與何時開 YOLO,紀錄存 doc/chat/",
       "category": "productivity",

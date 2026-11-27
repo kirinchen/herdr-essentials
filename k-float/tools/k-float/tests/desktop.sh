@@ -1,6 +1,6 @@
 #!/bin/bash
 # 在有視窗管理員的實體桌面上驗:置頂、被使用者移動會記住位置、被使用者關掉會通知並刪 spec。
-# 會在螢幕上開一個小視窗約 10 秒。用法:K_FLOAT_DISPLAY=:0 tools/k-float/tests/desktop.sh [截圖.png]
+# 會在螢幕上開一個小視窗約 10 秒。用法:K_FLOAT_DISPLAY=:0 k-float/tools/k-float/tests/desktop.sh [截圖.png]
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 BIN=$HERE/target/release/k-float

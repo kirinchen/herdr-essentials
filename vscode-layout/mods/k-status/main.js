@@ -1,10 +1,9 @@
 // k-status (herdr-essentials): the shipped workspace-status (the bar under the terminals), plus the
-// buttons that used to sit right of the tabs: Attach, Paste shot, Files, Changes. That leaves the
-// tab bar to the tabs. Attach and Paste shot are k-tabs' (it has the code and watches the
-// clipboard): the buttons here send it "attach" / "paste-shot".
+// buttons that used to sit right of the tabs: Files, Changes. That leaves the tab bar to the tabs.
+// Attach and Paste shot are k-attach, a block of its own at the right end of the bar.
 import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, agents, theme, run, window, keys, shared, layout, focused } from "herdr";
+import { spaces, agents, theme, run, window, keys, shared, layout } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -48,7 +47,6 @@ export default class WorkspaceStatus extends View {
         else { run("layout.select", { stack: "panel-body", child: id }); run("layout.show", { id: "panel" }); }
       });
     };
-    const terminal = Boolean(focused()?.terminal);
     return h_flex().size_full().px(14).gap(16).items_center().bg(t.chrome).border_t(1).border_color(t.border).text_size(11.8).text_color(t.muted)
       .child(label(space?.machine ? "server" : "monitor", space?.machine ?? "This computer"))
       .when(Boolean(space?.branch), el => el.child(label("branch", space.branch)))
@@ -56,14 +54,6 @@ export default class WorkspaceStatus extends View {
         .when(needs > 0, el => el.child(div().text_color(t.blocked).child(`· ${needs} ${needs === 1 ? "needs" : "need"} you`))))
       .child(div().flex_1())
       .child(h_flex().gap(2).items_center().flex_none()
-        // Attach files (system dialog → paths pasted into the focused terminal, no Enter).
-        .when(terminal, el => el.child(button("attach", "Attach", "mods/k-tabs/paperclip.svg", false)
-          .tooltip("Attach files: paste their paths into the terminal")
-          .on_click((_e, cx) => { cx.stop_propagation(); run("k-tabs.attach"); })))
-        // The clipboard holds an image (k-tabs says so) → save it as a PNG and paste that like Attach.
-        .when(terminal && shared("k-tabs.clip") === true, el => el.child(button("paste-shot", "Paste shot", "mods/k-tabs/image.svg", false)
-          .tooltip("Paste the clipboard image into the terminal")
-          .on_click((_e, cx) => { cx.stop_propagation(); run("k-tabs.paste-shot"); })))
         .when(Boolean(panel) && enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
         .when(Boolean(panel) && enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg"))))
       .child(div().id("palette").text_color(t.dim).on_click(() => run("app.palette")).child(this.hint(t)));

@@ -1,14 +1,12 @@
 // k-tabs (herdr-essentials): the shipped tab bar, but × puts a tab away (tab.settle) instead of ending it,
 // and the bar lists the tabs you opened, whatever space or machine they are in (like VS Code's editor
 // tabs), not the shown space's tabs: see open.js. A tab's right-click menu is menu.js (Close, Close Other
-// Tabs, Close All Tabs, as IntelliJ). Attach, Paste shot, Files and Changes are on the
-// status bar (k-status), which sends "attach" / "paste-shot" here. With shared "k-tabs.multiline"
+// Tabs, Close All Tabs, as IntelliJ). Files and Changes are on the
+// status bar (k-status); Attach and Paste shot are k-attach's. With shared "k-tabs.multiline"
 // (Settings → Look) the tabs wrap onto more lines and the bar grows to fit.
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
-import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, nextCommand, props } from "herdr";
-import { attach } from "./attach.js";
-import { watchClipboard, pasteShot } from "./shot.js";
+import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings, props } from "herdr";
 import { opened, neighbour, moved, cycled, trimmed, others } from "./open.js";
 import TabMenu, { DO } from "./menu.js";
 
@@ -47,20 +45,6 @@ export default class Tabs extends View {
     // What that menu last asked for (shared, so it outlives a restart): not to be done again.
     this.did = shared(DO)?.at ?? null;
     this.pressed = null;
-    // k-tabs: "Paste shot" shows only while the clipboard holds an image.
-    this.clipImage = false;
-    // k-status draws the button: it reads shared "k-tabs.clip".
-    if (shared("k-tabs.clip") === true) setShared("k-tabs.clip", false);
-    cx.spawn(async (cx) => watchClipboard((on) => { this.clipImage = on; if ((shared("k-tabs.clip") === true) !== on) setShared("k-tabs.clip", on); cx.notify(); },
-      (ms) => new Promise(done => cx.timer.after(ms, () => done()))));
-    // The status bar's Attach / Paste shot buttons (or a key: "k-tabs.attach").
-    cx.spawn(async (cx) => {
-      for (;;) {
-        const command = await nextCommand();
-        if (command === "attach") cx.spawn(async (cx) => attach(cx));
-        else if (command === "paste-shot") cx.spawn(async (cx) => pasteShot(cx));
-      }
-    });
     this.scroll = ScrollHandle.new();
     try { this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}"); } catch { this.panels = {}; }
     if (!this.panels || typeof this.panels !== "object" || Array.isArray(this.panels)) this.panels = {};

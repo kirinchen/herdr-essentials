@@ -8,10 +8,10 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import * as L from "../tools/k-chat/lib.mjs";
+import * as L from "../k-chat/tools/k-chat/lib.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const RUNNER = path.join(HERE, "..", "tools", "k-chat", "runner.mjs");
+const RUNNER = path.join(HERE, "..", "k-chat", "tools", "k-chat", "runner.mjs");
 const FIX = (n) => path.join(HERE, "fixtures", n);
 
 function setup(chair, opts = [], list = null) {

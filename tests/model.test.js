@@ -5,17 +5,19 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { modelOf, effortLevel, modelTip, MODELS } from "../mods/k-agents/model.js";
+import { modelOf, effortLevel, modelTip, MODELS } from "../vscode-layout/mods/k-agents/model.js";
 
-const mods = join(dirname(fileURLToPath(import.meta.url)), "..", "mods");
-const copies = readdirSync(mods).filter((m) => m !== "k-agents" && existsSync(join(mods, m, "model.js")));
+import { modDirs, modDir } from "./paths.js";
+
+const source = modDir("vscode-layout", "k-agents");
+const copies = modDirs().filter((m) => m.name !== "k-agents" && existsSync(join(m.dir, "model.js")));
 
 test("every copy of model.js and of its icons equals k-agents'", () => {
-  assert.ok(copies.includes("k-pane"), "k-pane carries a copy");
+  assert.ok(copies.some((m) => m.name === "k-pane"), "k-pane carries a copy");
   const files = ["model.js", ...MODELS.map(([, kind]) => `m-${kind}.svg`)];
   for (const m of copies) for (const f of files) {
-    assert.ok(existsSync(join(mods, m, f)), `mods/${m}/${f} is missing: cp mods/k-agents/${f} mods/${m}/`);
-    assert.equal(readFileSync(join(mods, m, f), "utf8"), readFileSync(join(mods, "k-agents", f), "utf8"), `mods/${m}/${f} is out of date: cp mods/k-agents/${f} mods/${m}/`);
+    assert.ok(existsSync(join(m.dir, f)), `${m.pkg}/mods/${m.name}/${f} is missing: cp vscode-layout/mods/k-agents/${f} ${m.pkg}/mods/${m.name}/`);
+    assert.equal(readFileSync(join(m.dir, f), "utf8"), readFileSync(join(source, f), "utf8"), `${m.pkg}/mods/${m.name}/${f} is out of date: cp vscode-layout/mods/k-agents/${f} ${m.pkg}/mods/${m.name}/`);
   }
 });
 

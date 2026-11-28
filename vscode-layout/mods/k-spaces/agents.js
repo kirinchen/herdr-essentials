@@ -5,6 +5,7 @@ import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { theme, spaces, knownAgents, run, closeOverlay, props, shared, setShared, exec, appHome } from "herdr";
 import { system } from "./inspect.js";
+import { check, there } from "./has.js";
 import { kindOf, list as sessions, resumeArgs, ago } from "./sessions.js";
 
 // The last agents each machine reported (the shipped new-menu's cache), shown while checking again.
@@ -35,6 +36,7 @@ export default class AgentMenu extends View {
     this.yolo = shared(YOLO_KEY) === true;
     this.handle = cx.focus_handle();
     cx.timer.after(30, () => this.handle.focus());
+    cx.spawn(async (cx) => { await check(["k-chat"]); cx.notify(); });
     cx.spawn(async (cx) => {
       try {
         this.agents = await knownAgents({ on: this.machine });
@@ -135,8 +137,8 @@ export default class AgentMenu extends View {
       .child(div().px(9).pt(4).pb(4).text_size(11).text_color(t.dim).truncate().child(`New tab in ${space?.name ?? "this space"}${this.machine ? ` · ${this.machine}` : ""}`))
       .child(this.row(t, "k-agent-terminal", svg("icons/shell.svg").size(14), "Terminal", () => { run("tab.new", { space: this.spaceId }); this.close(); }))
       // Its record is written on this machine, into the space's folder: not for a space on another machine.
-      .child(this.row(t, "k-agent-chat", svg("mods/k-spaces/bot.svg").size(14).text_color(t.foreground), this.busy ? "Starting chat…" : "Chat", (cx) => this.chat(cx),
-        this.error ?? (this.machine ? "this machine only" : "saved in doc/chat"), !this.machine && !this.busy && Boolean(space?.folder)))
+      .when(there("k-chat"), (el) => el.child(this.row(t, "k-agent-chat", svg("mods/k-spaces/bot.svg").size(14).text_color(t.foreground), this.busy ? "Starting chat…" : "Chat", (cx) => this.chat(cx),
+        this.error ?? (this.machine ? "this machine only" : "saved in doc/chat"), !this.machine && !this.busy && Boolean(space?.folder))))
       .child(h_flex().px(9).pt(8).pb(4).items_center()
         .child(div().flex_1().text_size(11).text_color(t.dim).child("Start an agent"))
         // YOLO: the agent asks nothing (its skip-permissions flag); Y toggles it too.

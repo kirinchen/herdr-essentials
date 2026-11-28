@@ -1,0 +1,8 @@
+{
+  "global": {
+    "alt-left": "k-chrome.back",
+    "alt-right": "k-chrome.forward",
+    "ctrl-q": "k-chrome.last-input",
+    "ctrl-shift-t": "mod.open:picker"
+  }
+}

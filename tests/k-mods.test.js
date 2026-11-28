@@ -1,12 +1,12 @@
-// Tests for mods/k-settings/core.js (the Mods page, was k-mods) (run: node --test tests/). Derived from the tests of
-// jacksonpires/herdr-app-mod-manager (MIT, see mods/k-settings/LICENSE).
+// Tests for vscode-layout/mods/k-settings/core.js (the Mods page, was k-mods) (run: node --test tests/). Derived from the tests of
+// jacksonpires/herdr-app-mod-manager (MIT, see vscode-layout/mods/k-settings/LICENSE).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, lstatSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import * as core from "../mods/k-settings/core.js";
+import * as core from "../vscode-layout/mods/k-settings/core.js";
 
 const io = {
   platform: process.platform === "darwin" ? "macos" : "linux",

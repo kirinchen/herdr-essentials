@@ -1,7 +1,7 @@
 // node --test tests/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { opened, neighbour, moved, cycled, trimmed, others } from "../mods/k-tabs/open.js";
+import { opened, neighbour, moved, cycled, trimmed, others } from "../vscode-layout/mods/k-tabs/open.js";
 
 test("opened: a tab shown for the first time goes right of the one shown before", () => {
   const open = ["a", "b", "c"];

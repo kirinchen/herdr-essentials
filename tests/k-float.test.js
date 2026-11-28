@@ -1,26 +1,27 @@
 // Tests for k-float (run: node --test tests/).
 // A mod can only import from its own folder ("resolves outside the application directory"), so every
-// mod that uses the SDK carries a copy of mods/k-float/float.js. They must stay the same file:
-//   cp mods/k-float/float.js mods/<mod>/float.js
+// mod that uses the SDK carries a copy of k-float/mods/k-float/float.js. They must stay the same file:
+//   cp k-float/mods/k-float/float.js mods/<mod>/float.js
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const mods = join(dirname(fileURLToPath(import.meta.url)), "..", "mods");
-const source = readFileSync(join(mods, "k-float", "float.js"), "utf8");
+import { modDirs, modDir, ROOT } from "./paths.js";
 
-test("every copy of float.js equals mods/k-float/float.js", () => {
-  const copies = readdirSync(mods).filter((m) => m !== "k-float" && existsSync(join(mods, m, "float.js")));
-  assert.ok(copies.includes("k-note"), "k-note carries a copy");
-  for (const m of copies) assert.equal(readFileSync(join(mods, m, "float.js"), "utf8"), source, `mods/${m}/float.js is out of date: cp mods/k-float/float.js mods/${m}/float.js`);
+const source = readFileSync(join(modDir("k-float", "k-float"), "float.js"), "utf8");
+
+test("every copy of float.js equals k-float/mods/k-float/float.js", () => {
+  const copies = modDirs().filter((m) => m.name !== "k-float" && existsSync(join(m.dir, "float.js")));
+  assert.ok(copies.some((m) => m.name === "k-note"), "k-note carries a copy");
+  for (const m of copies) assert.equal(readFileSync(join(m.dir, "float.js"), "utf8"), source, `${m.pkg}/mods/${m.name}/float.js is out of date: cp k-float/mods/k-float/float.js ${m.pkg}/mods/${m.name}/float.js`);
 });
 
 test("no mod imports float.js from another mod's folder", () => {
-  for (const m of readdirSync(mods)) {
-    for (const f of readdirSync(join(mods, m)).filter((f) => f.endsWith(".js"))) {
-      assert.doesNotMatch(readFileSync(join(mods, m, f), "utf8"), /from\s+["']\.\.\/[^"']*float\.js["']/, `mods/${m}/${f}`);
+  for (const m of modDirs()) {
+    for (const f of readdirSync(m.dir).filter((f) => f.endsWith(".js"))) {
+      assert.doesNotMatch(readFileSync(join(m.dir, f), "utf8"), /from\s+["']\.\.\/[^"']*float\.js["']/, `${m.pkg}/mods/${m.name}/${f}`);
     }
   }
 });
@@ -28,8 +29,8 @@ test("no mod imports float.js from another mod's folder", () => {
 // What a page gets (window.float) lives in the helper; float.js and the protocol document describe it.
 // A name that exists in one and not the others is a page written from the docs that doesn't work.
 test("the collapse / hover names are the same in the helper, float.js and the protocol document", () => {
-  const top = join(mods, "..");
-  const helper = readFileSync(join(top, "tools", "k-float", "src", "main.rs"), "utf8");
+  const top = ROOT;
+  const helper = readFileSync(join(top, "k-float", "tools", "k-float", "src", "main.rs"), "utf8");
   const doc = readFileSync(join(top, "doc", "k-float-protocol.md"), "utf8");
   for (const name of ["hoverOpacity", "collapsed", "collapsedWidth", "collapsedHeight", "collapseAnchor", "data-float-drag-click", "data-float-collapsed", "onCollapsed"]) {
     assert.ok(doc.includes(name), `doc/k-float-protocol.md doesn't mention ${name}`);
